@@ -1,4 +1,5 @@
 const logger = require('../utils/pinoLogger');
+const s3StorageService = require('../services/s3StorageService');
 
 const validate = (schema, source = 'body') => (req, res, next) => {
     const result = schema.safeParse(req[source]);
@@ -13,6 +14,9 @@ const validate = (schema, source = 'body') => (req, res, next) => {
                     : [];
 
         files.forEach((file) => {
+            if (file?.key) {
+                s3StorageService.deleteObject(file.key).catch(() => {});
+            }
             if (file?.path) {
                 require('fs').unlink(file.path, () => {});
             }

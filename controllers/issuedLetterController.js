@@ -153,9 +153,10 @@ const getFilters = async (req, res, next) => {
 
 const downloadIssuedLetter = async (req, res, next) => {
     try {
-        const { buffer, filename } = await issuedLetterService.getLetterDocxDownload(req.params.id);
+        const { buffer, filename, url } = await issuedLetterService.getLetterDocxDownload(req.params.id);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        if (url) res.setHeader('X-S3-File-Url', url);
         res.send(buffer);
     } catch (error) {
         next(error);

@@ -29,6 +29,8 @@ const letterTemplateSchema = new mongoose.Schema({
         filename: { type: String },
         originalName: { type: String },
         path: { type: String },
+        key: { type: String },
+        url: { type: String },
         size: { type: Number },
         mimeType: { type: String }
     },
@@ -36,6 +38,8 @@ const letterTemplateSchema = new mongoose.Schema({
         filename: { type: String },
         originalName: { type: String },
         path: { type: String },
+        key: { type: String },
+        url: { type: String },
         size: { type: Number },
         mimeType: { type: String }
     },
@@ -58,9 +62,9 @@ letterTemplateSchema.index({ title: 1, incidentCategory: 1 }, { unique: true });
 
 letterTemplateSchema.methods.hasFile = function(lang = 'en') {
     if (lang === 'en') {
-        return !!(this.englishTemplateFile?.path);
+        return !!(this.englishTemplateFile?.key || this.englishTemplateFile?.path);
     } else if (lang === 'ta') {
-        return !!(this.tamilTemplateFile?.path);
+        return !!(this.tamilTemplateFile?.key || this.tamilTemplateFile?.path);
     }
     return false;
 };

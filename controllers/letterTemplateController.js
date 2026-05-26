@@ -2,6 +2,7 @@
 
 const upload = require('../middleware/uploadMiddleware');
 const letterTemplateService = require('../services/letterTemplateService');
+const s3StorageService = require('../services/s3StorageService');
 
 const getIncidentCategories = async (req, res, next) => {
     try {
@@ -93,10 +94,18 @@ const deleteLetterTemplate = async (req, res, next) => {
 
 const downloadTemplate = async (req, res, next) => {
     try {
-        const { filePath, originalName } = await letterTemplateService.resolveTemplateDownloadPath(
+        const { filePath, key, url, originalName } = await letterTemplateService.resolveTemplateDownloadPath(
             req.params.id,
             req.query.lang || 'en'
         );
+
+        if (key) {
+            const buffer = await s3StorageService.getBuffer(key);
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename="${originalName}"`);
+            if (url) res.setHeader('X-S3-File-Url', url);
+            return res.send(buffer);
+        }
 
         res.download(filePath, originalName);
     } catch (error) {
@@ -130,7 +139,7 @@ module.exports = {
     getLetterTemplates,
     getLetterTemplateById,
     createLetterTemplate,
-    uploadTemplateFile: upload.local.single('docx'),
+    uploadTemplateFile: upload.single('docx'),
     uploadTemplateFileController,
     updateLetterTemplate,
     deleteLetterTemplate,

@@ -7,19 +7,13 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const mongoose = require('mongoose');
 
 const LetterTemplate = require('../models/LetterTemplate');
 const Category = require('../models/Category');
 const { createLog } = require('../utils/logger');
 const logger = require('../utils/pinoLogger');
-
-const UPLOAD_DIR = path.join(__dirname, '../uploads/templates');
-
-if (!fs.existsSync(UPLOAD_DIR)) {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
+const s3StorageService = require('./s3StorageService');
 
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -27,8 +21,8 @@ const resolveFileExists = (filePath) => !!(filePath && fs.existsSync(filePath));
 
 const appendDocxAvailabilityFlags = (templateObj) => ({
     ...templateObj,
-    hasEnglishDocx: resolveFileExists(templateObj?.englishTemplateFile?.path),
-    hasTamilDocx: resolveFileExists(templateObj?.tamilTemplateFile?.path),
+    hasEnglishDocx: !!(templateObj?.englishTemplateFile?.key || templateObj?.englishTemplateFile?.url || resolveFileExists(templateObj?.englishTemplateFile?.path)),
+    hasTamilDocx: !!(templateObj?.tamilTemplateFile?.key || templateObj?.tamilTemplateFile?.url || resolveFileExists(templateObj?.tamilTemplateFile?.path)),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,8 +82,8 @@ const getTemplateByCategory = async (category) => {
         };
     }
 
-    const hasEnglish = resolveFileExists(template.englishTemplateFile?.path);
-    const hasTamil = resolveFileExists(template.tamilTemplateFile?.path);
+    const hasEnglish = !!(template.englishTemplateFile?.key || template.englishTemplateFile?.url || resolveFileExists(template.englishTemplateFile?.path));
+    const hasTamil = !!(template.tamilTemplateFile?.key || template.tamilTemplateFile?.url || resolveFileExists(template.tamilTemplateFile?.path));
 
     if (!hasEnglish && !hasTamil) {
         return {
@@ -206,7 +200,10 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     }
 
     if (language !== 'en' && language !== 'ta') {
-        if (fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
+        if (uploadedFile.key) {
+            try { await s3StorageService.deleteObject(uploadedFile.key); } catch { /* Non-fatal */ }
+        }
+        if (uploadedFile.path && fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
         const err = new Error('Invalid language specified. Use "en" or "ta".');
         err.statusCode = 400;
         throw err;
@@ -214,7 +211,10 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
 
     const template = await LetterTemplate.findById(templateId);
     if (!template) {
-        if (fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
+        if (uploadedFile.key) {
+            try { await s3StorageService.deleteObject(uploadedFile.key); } catch { /* Non-fatal */ }
+        }
+        if (uploadedFile.path && fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
         const err = new Error('Template not found');
         err.statusCode = 404;
         throw err;
@@ -223,22 +223,33 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     const fileField = language === 'en' ? 'englishTemplateFile' : 'tamilTemplateFile';
     const hasFlagField = language === 'en' ? 'hasEnglishVersion' : 'hasTamilVersion';
 
+    if (template[fileField]?.key) {
+        try { await s3StorageService.deleteObject(template[fileField].key); } catch { /* Non-fatal */ }
+    }
     if (template[fileField]?.path && fs.existsSync(template[fileField].path)) {
         try { fs.unlinkSync(template[fileField].path); } catch { /* Non-fatal */ }
     }
 
     const sanitizedTitle = template.title.replace(/[^a-zA-Z0-9.-]/g, '_');
     const newFilename = `${sanitizedTitle}_${language}.docx`;
-    const newPath = path.join(UPLOAD_DIR, newFilename);
-
-    if (fs.existsSync(uploadedFile.path)) {
-        fs.renameSync(uploadedFile.path, newPath);
-    }
+    const uploadResult = uploadedFile.buffer
+        ? await s3StorageService.uploadBuffer({
+            buffer: uploadedFile.buffer,
+            key: `letter-templates/${template._id}/${newFilename}`,
+            filename: newFilename,
+            contentType: uploadedFile.mimetype,
+        })
+        : {
+            key: uploadedFile.key,
+            url: uploadedFile.location,
+        };
 
     template[fileField] = {
         filename: newFilename,
         originalName: uploadedFile.originalname,
-        path: newPath,
+        path: uploadResult.url,
+        key: uploadResult.key,
+        url: uploadResult.url,
         size: uploadedFile.size,
         mimeType: uploadedFile.mimetype,
     };
@@ -266,6 +277,9 @@ const removeTemplateVariant = async (templateId, lang, userId) => {
     const fileField = lang === 'en' ? 'englishTemplateFile' : 'tamilTemplateFile';
     const hasFlagField = lang === 'en' ? 'hasEnglishVersion' : 'hasTamilVersion';
 
+    if (template[fileField]?.key) {
+        try { await s3StorageService.deleteObject(template[fileField].key); } catch { /* Non-fatal */ }
+    }
     if (template[fileField]?.path && fs.existsSync(template[fileField].path)) {
         try { fs.unlinkSync(template[fileField].path); } catch { /* Non-fatal */ }
     }
@@ -292,6 +306,9 @@ const deleteLetterTemplate = async (templateId, userId) => {
     }
 
     for (const field of ['englishTemplateFile', 'tamilTemplateFile']) {
+        if (template[field]?.key) {
+            try { await s3StorageService.deleteObject(template[field].key); } catch { /* Non-fatal */ }
+        }
         if (template[field]?.path && fs.existsSync(template[field].path)) {
             try { fs.unlinkSync(template[field].path); } catch { /* Non-fatal */ }
         }
@@ -320,12 +337,12 @@ const resolveTemplateDownloadPath = async (templateId, lang) => {
     }
 
     const fileField = lang === 'en' ? 'englishTemplateFile' : 'tamilTemplateFile';
-    if (!template[fileField]?.path) {
+    if (!template[fileField]?.key && !template[fileField]?.path) {
         const err = new Error('No template file uploaded for this variant');
         err.statusCode = 404;
         throw err;
     }
-    if (!fs.existsSync(template[fileField].path)) {
+    if (!template[fileField]?.key && !fs.existsSync(template[fileField].path)) {
         const err = new Error('Template file not found on server');
         err.statusCode = 404;
         throw err;
@@ -333,6 +350,8 @@ const resolveTemplateDownloadPath = async (templateId, lang) => {
 
     return {
         filePath: template[fileField].path,
+        key: template[fileField].key,
+        url: template[fileField].url || template[fileField].path,
         originalName: template[fileField].originalName || `${template.title}_${lang}.docx`,
     };
 };
@@ -420,5 +439,4 @@ module.exports = {
     resolveTemplateDownloadPath,
     getSmartTags,
     buildReferenceGuideText,
-    UPLOAD_DIR,
 };

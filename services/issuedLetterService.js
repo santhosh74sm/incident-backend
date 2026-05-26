@@ -17,6 +17,7 @@ const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { letterQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
+const s3StorageService = require('./s3StorageService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // XML / DOCX processing helpers
@@ -131,6 +132,19 @@ const resolveTemplatePath = (templatePath) => {
     return null;
 };
 
+const hasTemplateFile = (templateFile) =>
+    !!(templateFile?.key || templateFile?.url || resolveTemplatePath(templateFile?.path));
+
+const getTemplateBuffer = async (templateFile) => {
+    if (templateFile?.key) {
+        return s3StorageService.getBuffer(templateFile.key);
+    }
+
+    const templatePath = resolveTemplatePath(templateFile?.path);
+    if (!templatePath) return null;
+    return fs.readFileSync(templatePath);
+};
+
 const formatLetterDate = (value) => {
     const date = value ? new Date(value) : new Date();
     const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
@@ -207,8 +221,8 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             const templateCategory = template.incidentCategory?.trim();
             if (!templateCategory || templateCategory.toLowerCase() !== incidentCategory.toLowerCase())
                 return false;
-            if (language === 'ta') return !!resolveTemplatePath(template.tamilTemplateFile?.path);
-            return !!resolveTemplatePath(template.englishTemplateFile?.path);
+            if (language === 'ta') return hasTemplateFile(template.tamilTemplateFile);
+            return hasTemplateFile(template.englishTemplateFile);
         });
 
         if (!matchingTemplate) {
@@ -219,12 +233,12 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             };
         }
 
-        const rawPath =
+        const templateFile =
             language === 'ta'
-                ? matchingTemplate.tamilTemplateFile.path
-                : matchingTemplate.englishTemplateFile.path;
-        const templatePath = resolveTemplatePath(rawPath);
-        if (!templatePath) {
+                ? matchingTemplate.tamilTemplateFile
+                : matchingTemplate.englishTemplateFile;
+        const templateBuffer = await getTemplateBuffer(templateFile);
+        if (!templateBuffer) {
             return { success: false, message: 'Template file not found' };
         }
 
@@ -232,7 +246,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         let outputBuffer;
 
         try {
-            outputBuffer = renderDocxTemplate(fs.readFileSync(templatePath), studentData);
+            outputBuffer = renderDocxTemplate(templateBuffer, studentData);
         } catch (docxErr) {
             logger.error('Letter generation failed (docxtemplater)', {
                 error: docxErr?.message,
@@ -247,10 +261,17 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         const englishTemplate = allTemplates.find(
             (t) =>
                 t.incidentCategory?.trim().toLowerCase() === incidentCategory.toLowerCase() &&
-                t.englishTemplateFile?.path
+                hasTemplateFile(t.englishTemplateFile)
         );
 
         const letterNumber = await IssuedLetter.generateLetterNumber();
+        const generatedFilename = `${letterNumber}.docx`;
+        const generatedUpload = await s3StorageService.uploadBuffer({
+            buffer: outputBuffer,
+            key: `issued-letters/${incident._id}/${generatedFilename}`,
+            filename: generatedFilename,
+            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        });
         const issuedLetter = new IssuedLetter({
             letterNumber,
             incident: incident._id,
@@ -261,7 +282,9 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             incidentCategory: incident.category,
             templateId: matchingTemplate._id,
             title: englishTemplate ? englishTemplate.title : matchingTemplate.title,
-            generatedDocx: outputBuffer,
+            generatedDocx: null,
+            generatedDocxKey: generatedUpload.key,
+            generatedDocxUrl: generatedUpload.url,
             issuedBy: userId,
             status: 'Issued',
             language,
@@ -555,6 +578,10 @@ const deleteIssuedLetter = async (id, userId) => {
         throw err;
     }
 
+    if (letter.generatedDocxKey) {
+        try { await s3StorageService.deleteObject(letter.generatedDocxKey); } catch { /* Non-fatal */ }
+    }
+
     await IssuedLetter.findByIdAndDelete(id);
 
     createLog('Letter Deleted', userId, 'Letter', letter._id, {
@@ -615,12 +642,21 @@ const getLetterDocxDownload = async (id) => {
         err.statusCode = 404;
         throw err;
     }
-    if (!letter.generatedDocx) {
+    if (!letter.generatedDocxKey && !letter.generatedDocx) {
         const err = new Error('Generated document not found');
         err.statusCode = 404;
         throw err;
     }
-    return { buffer: letter.generatedDocx, filename: generateLetterFilename(letter, 'docx') };
+
+    const buffer = letter.generatedDocxKey
+        ? await s3StorageService.getBuffer(letter.generatedDocxKey)
+        : letter.generatedDocx;
+
+    return {
+        buffer,
+        filename: generateLetterFilename(letter, 'docx'),
+        url: letter.generatedDocxUrl || null,
+    };
 };
 
 module.exports = {

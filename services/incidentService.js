@@ -22,6 +22,7 @@ const { autoGenerateLetterFromIncident } = require('./issuedLetterService');
 const notificationService = require('./notificationService');
 const { letterQueue, bulkQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
+const s3StorageService = require('./s3StorageService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -1168,7 +1169,14 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
                 return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
             }).join(',')
         ).join('\n');
-        return { format: 'csv', content: '\ufeff' + csvContent };
+        const content = '\ufeff' + csvContent;
+        const upload = await s3StorageService.uploadBuffer({
+            buffer: Buffer.from(content, 'utf8'),
+            key: 'exports/templates/incident_upload_template.csv',
+            filename: 'incident_upload_template.csv',
+            contentType: 'text/csv; charset=utf-8',
+        });
+        return { format: 'csv', content, url: upload.url, key: upload.key };
     }
 
     const wb = XLSX.utils.book_new();
@@ -1190,7 +1198,14 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
     });
 
     XLSX.utils.book_append_sheet(wb, ws, 'Incident Upload Template');
-    return { format: 'xlsx', buffer: XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) };
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const upload = await s3StorageService.uploadBuffer({
+        buffer,
+        key: 'exports/templates/incident_upload_template.xlsx',
+        filename: 'incident_upload_template.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    return { format: 'xlsx', buffer, url: upload.url, key: upload.key };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1342,7 +1357,14 @@ const buildCaseReportDocx = async (incidentId) => {
         category: incident.category,
     });
 
-    return { buffer, filename };
+    const upload = await s3StorageService.uploadBuffer({
+        buffer,
+        key: `exports/reports/${incident._id}/${filename}`,
+        filename,
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+
+    return { buffer, filename, url: upload.url, key: upload.key };
 };
 
 module.exports = {

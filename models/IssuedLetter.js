@@ -47,6 +47,14 @@ const issuedLetterSchema = new mongoose.Schema({
         type: Buffer,
         default: null
     },
+    generatedDocxKey: {
+        type: String,
+        default: ''
+    },
+    generatedDocxUrl: {
+        type: String,
+        default: ''
+    },
     issuedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

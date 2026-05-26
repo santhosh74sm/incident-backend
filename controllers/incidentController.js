@@ -233,11 +233,13 @@ const downloadTemplate = async (req, res, next) => {
         if (result.format === 'csv') {
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');
             res.setHeader('Content-Disposition', 'attachment; filename="incident_upload_template.csv"');
+            if (result.url) res.setHeader('X-S3-File-Url', result.url);
             return res.send(result.content);
         }
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename="incident_upload_template.xlsx"');
+        if (result.url) res.setHeader('X-S3-File-Url', result.url);
         return res.send(result.buffer);
     } catch (error) {
         next(error);
@@ -250,10 +252,11 @@ const downloadTemplate = async (req, res, next) => {
 
 const exportIncidentReport = async (req, res, next) => {
     try {
-        const { buffer, filename } = await incidentService.buildCaseReportDocx(req.params.id);
+        const { buffer, filename, url } = await incidentService.buildCaseReportDocx(req.params.id);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        if (url) res.setHeader('X-S3-File-Url', url);
         return res.send(buffer);
     } catch (error) {
         next(error);
