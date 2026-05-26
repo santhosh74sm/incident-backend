@@ -1,0 +1,336 @@
+const Category = require('../models/Category');
+const Location = require('../models/Location');
+const EvidenceType = require('../models/EvidenceType');
+const FieldOperationOption = require('../models/FieldOperationOption');
+const Incident = require('../models/Incident');
+const LetterTemplate = require('../models/LetterTemplate');
+const { createLog } = require('../utils/logger');
+const AppError = require('../utils/AppError');
+
+const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const getActorId = (actor) => actor?.id || actor?._id || 'System';
+
+const ensureOptionManager = (actor, message = 'Access Denied') => {
+    if (!['Admin', 'Teacher', 'admin', 'teacher'].includes(actor?.role)) {
+        throw new AppError(message, 403);
+    }
+};
+
+const findDuplicateByName = (Model, name, excludeId = null) => {
+    const query = { name: { $regex: new RegExp(`^${escapeRegex(name)}$`, 'i') } };
+    if (excludeId) query._id = { $ne: excludeId };
+    return Model.findOne(query).select('_id').lean();
+};
+
+const getCategories = async () => Category.find().sort({ name: 1 }).lean();
+
+const addCategory = async ({ input, actor }) => {
+    ensureOptionManager(actor);
+
+    const trimmedName = String(input.name || '').trim();
+    if (!trimmedName) throw new AppError('Category name is required', 400);
+
+    const exists = await findDuplicateByName(Category, trimmedName);
+    if (exists) throw new AppError('This type already exists', 400);
+
+    const category = await Category.create({ name: trimmedName });
+
+    createLog('Add', getActorId(actor), 'Category', category._id, {
+        targetLabel: category.name,
+        details: `New Incident Type added: ${category.name}`,
+    });
+
+    return category;
+};
+
+const updateCategory = async ({ id, input, actor }) => {
+    ensureOptionManager(actor);
+
+    const nextName = String(input.name || '').trim();
+    if (!nextName) throw new AppError('Category name is required', 400);
+
+    const category = await Category.findById(id);
+    if (!category) throw new AppError('Category not found', 404);
+
+    const duplicate = await findDuplicateByName(Category, nextName, category._id);
+    if (duplicate) throw new AppError('This type already exists', 400);
+
+    const previousName = category.name;
+    category.name = nextName;
+    await category.save();
+
+    await Promise.all([
+        Incident.updateMany({ category: previousName }, { $set: { category: nextName } }),
+        LetterTemplate.updateMany({ incidentCategory: previousName }, { $set: { incidentCategory: nextName } }),
+    ]);
+
+    createLog('Edit', getActorId(actor), 'Category', category._id, {
+        targetLabel: nextName,
+        previousName,
+        newName: nextName,
+        details: `Incident Type renamed: ${previousName} -> ${nextName}`,
+    });
+
+    return category;
+};
+
+const deleteCategory = async ({ id, actor }) => {
+    ensureOptionManager(actor);
+
+    const category = await Category.findById(id);
+    if (!category) throw new AppError('Category not found', 404);
+
+    await Category.findByIdAndDelete(id);
+
+    createLog('Remove', getActorId(actor), 'Category', category._id, {
+        targetLabel: category.name,
+        details: `Incident Type deleted: ${category.name}`,
+    });
+
+    return { message: 'Category deleted successfully' };
+};
+
+const getLocations = async () => Location.find().sort({ name: 1 }).lean();
+
+const addLocation = async ({ input, actor }) => {
+    ensureOptionManager(actor);
+
+    const trimmedName = String(input.name || '').trim();
+    if (!trimmedName) throw new AppError('Zone name is required', 400);
+
+    const exists = await findDuplicateByName(Location, trimmedName);
+    if (exists) throw new AppError('This zone already exists', 400);
+
+    const location = await Location.create({ name: trimmedName });
+
+    createLog('Add', getActorId(actor), 'Location', location._id, {
+        targetLabel: location.name,
+        details: `New Location Zone added: ${location.name}`,
+    });
+
+    return location;
+};
+
+const updateLocation = async ({ id, input, actor }) => {
+    ensureOptionManager(actor);
+
+    const nextName = String(input.name || '').trim();
+    if (!nextName) throw new AppError('Zone name is required', 400);
+
+    const location = await Location.findById(id);
+    if (!location) throw new AppError('Location not found', 404);
+
+    const duplicate = await findDuplicateByName(Location, nextName, location._id);
+    if (duplicate) throw new AppError('This zone already exists', 400);
+
+    const previousName = location.name;
+    location.name = nextName;
+    await location.save();
+
+    await Incident.updateMany({ location: previousName }, { $set: { location: nextName } });
+
+    createLog('Edit', getActorId(actor), 'Location', location._id, {
+        targetLabel: nextName,
+        previousName,
+        newName: nextName,
+        details: `Location Zone renamed: ${previousName} -> ${nextName}`,
+    });
+
+    return location;
+};
+
+const deleteLocation = async ({ id, actor }) => {
+    ensureOptionManager(actor);
+
+    const location = await Location.findById(id);
+    if (!location) throw new AppError('Location not found', 404);
+
+    await Location.findByIdAndDelete(id);
+
+    createLog('Remove', getActorId(actor), 'Location', location._id, {
+        targetLabel: location.name,
+        details: `Location Zone deleted: ${location.name}`,
+    });
+
+    return { message: 'Location deleted successfully' };
+};
+
+const getEvidenceTypes = async () => EvidenceType.find({}).sort({ name: 1 }).lean();
+
+const addEvidenceType = async ({ input, actor }) => {
+    ensureOptionManager(actor, 'Admin or Teacher access required');
+
+    const nextName = String(input.name || '').trim();
+    if (!nextName) throw new AppError('Evidence type name is required', 400);
+
+    const existing = await findDuplicateByName(EvidenceType, nextName);
+    if (existing) throw new AppError('Evidence type already exists', 400);
+
+    const evidenceType = await EvidenceType.create({
+        name: nextName,
+        description: input.description?.trim() || '',
+        createdBy: getActorId(actor),
+    });
+
+    createLog('Add', getActorId(actor), 'EvidenceType', evidenceType._id, {
+        targetLabel: evidenceType.name,
+        details: `Evidence type added: ${evidenceType.name}`,
+    });
+
+    return evidenceType;
+};
+
+const updateEvidenceType = async ({ id, input, actor }) => {
+    ensureOptionManager(actor, 'Admin or Teacher access required');
+
+    const nextName = String(input.name || '').trim();
+    if (!nextName) throw new AppError('Evidence type name is required', 400);
+
+    const evidenceType = await EvidenceType.findById(id);
+    if (!evidenceType) throw new AppError('Evidence type not found', 404);
+
+    const existing = await findDuplicateByName(EvidenceType, nextName, evidenceType._id);
+    if (existing) throw new AppError('Evidence type already exists', 400);
+
+    const previousName = evidenceType.name;
+    evidenceType.name = nextName;
+    if (input.description !== undefined) {
+        evidenceType.description = input.description?.trim() || '';
+    }
+
+    await evidenceType.save();
+
+    await Incident.updateMany(
+        { 'evidence.evidenceType': previousName },
+        { $set: { 'evidence.$[entry].evidenceType': nextName } },
+        { arrayFilters: [{ 'entry.evidenceType': previousName }] }
+    );
+
+    createLog('Edit', getActorId(actor), 'EvidenceType', evidenceType._id, {
+        targetLabel: nextName,
+        previousName,
+        newName: nextName,
+        details: `Evidence type renamed: ${previousName} -> ${nextName}`,
+    });
+
+    return evidenceType;
+};
+
+const deleteEvidenceType = async ({ id, actor }) => {
+    ensureOptionManager(actor, 'Admin or Teacher access required');
+
+    const evidenceType = await EvidenceType.findById(id);
+    if (!evidenceType) throw new AppError('Evidence type not found', 404);
+
+    await EvidenceType.findByIdAndDelete(id);
+
+    createLog('Remove', getActorId(actor), 'EvidenceType', evidenceType._id, {
+        targetLabel: evidenceType.name,
+        details: `Evidence type deleted: ${evidenceType.name}`,
+    });
+
+    return { message: 'Evidence type deleted successfully' };
+};
+
+const defaultOptions = {
+    handler: [
+        { label: 'Met with student', order: 1 },
+        { label: 'Progress review completed', order: 2 },
+        { label: 'Verbal warning issued', order: 3 },
+        { label: 'Parent/guardian contacted', order: 4 },
+        { label: 'Evidence reviewed', order: 5 },
+        { label: 'Counseling session conducted', order: 6 },
+    ],
+    assigner: [
+        { label: 'Schedule 15-day counseling cycle', order: 1 },
+        { label: 'Review evidence', order: 2 },
+        { label: 'Parent notification sent', order: 3 },
+        { label: 'Handler assignment confirmed', order: 4 },
+        { label: 'Case escalated', order: 5 },
+        { label: 'Initial assessment completed', order: 6 },
+    ],
+};
+
+const seedFieldOperationDefaults = async (type) => {
+    const existing = await FieldOperationOption.find({ type, isDefault: true }).select('_id').lean();
+    if (existing.length === 0 && defaultOptions[type]) {
+        await FieldOperationOption.insertMany(defaultOptions[type].map((option) => ({
+            ...option,
+            type,
+            isDefault: true,
+        })));
+    }
+};
+
+const getFieldOperationOptions = async (type) => {
+    if (!type || !['handler', 'assigner'].includes(type)) {
+        throw new AppError('Valid type (handler/assigner) is required', 400);
+    }
+
+    await seedFieldOperationDefaults(type);
+    return FieldOperationOption.find({ type }).sort({ order: 1 }).lean();
+};
+
+const addFieldOperationOption = async ({ input }) => {
+    if (!input.type || !['handler', 'assigner'].includes(input.type)) {
+        throw new AppError('Valid type is required', 400);
+    }
+
+    const label = String(input.label || '').trim();
+    if (!label) throw new AppError('Label is required', 400);
+
+    const maxOrder = await FieldOperationOption.findOne({ type: input.type }).sort({ order: -1 }).select('order').lean();
+    const option = await FieldOperationOption.create({
+        label,
+        type: input.type,
+        order: maxOrder ? maxOrder.order + 1 : 1,
+        isDefault: false,
+    });
+
+    return option;
+};
+
+const deleteFieldOperationOption = async (id) => {
+    const option = await FieldOperationOption.findById(id);
+    if (!option) throw new AppError('Option not found', 404);
+
+    await FieldOperationOption.findByIdAndDelete(id);
+    return { message: 'Option deleted successfully' };
+};
+
+const reorderFieldOperationOptions = async (options) => {
+    if (!Array.isArray(options)) {
+        throw new AppError('Options array is required', 400);
+    }
+
+    const bulkOps = options.map((item, index) => ({
+        updateOne: {
+            filter: { _id: item._id || item.id },
+            update: { order: index },
+        },
+    }));
+
+    await FieldOperationOption.bulkWrite(bulkOps);
+
+    const type = options[0]?.type;
+    return FieldOperationOption.find({ type }).sort({ order: 1 }).lean();
+};
+
+module.exports = {
+    getCategories,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    getLocations,
+    addLocation,
+    updateLocation,
+    deleteLocation,
+    getEvidenceTypes,
+    addEvidenceType,
+    updateEvidenceType,
+    deleteEvidenceType,
+    getFieldOperationOptions,
+    addFieldOperationOption,
+    deleteFieldOperationOption,
+    reorderFieldOperationOptions,
+};
