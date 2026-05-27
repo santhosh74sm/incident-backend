@@ -10,11 +10,16 @@ const SECRETS = {
 };
 
 const normalizeRoleForApp = (user) => {
-    if (user?.role === 'teacher') {
-        user.role = 'Teacher';
-    }
-    if (user?.role === 'super_admin') {
-        user.role = 'Super Admin';
+    const roleMap = {
+        admin: 'Admin',
+        teacher: 'Teacher',
+        student: 'Student',
+        super_admin: 'Super Admin',
+        'super admin': 'Super Admin',
+    };
+    const normalizedRole = roleMap[String(user?.role || '').trim().toLowerCase()];
+    if (normalizedRole) {
+        user.role = normalizedRole;
     }
     if (user?._id && !user.id) {
         user.id = user._id.toString();
@@ -138,9 +143,9 @@ const optionalProtect = async (req, res, next) => {
 
 const authorize = (...roles) => {
     return (req, res, next) => {
-        const roleMap = { admin: 'Admin', teacher: 'Teacher', student: 'Student', super_admin: 'Super Admin' };
+        const roleMap = { admin: 'Admin', teacher: 'Teacher', student: 'Student', super_admin: 'Super Admin', 'super admin': 'Super Admin' };
         const rawRole = req.user?.role;
-        const userRole = typeof rawRole === 'string' ? roleMap[rawRole.toLowerCase()] || rawRole : rawRole;
+        const userRole = typeof rawRole === 'string' ? roleMap[rawRole.trim().toLowerCase()] || rawRole : rawRole;
         const isAllowed = roles.includes(userRole) || (userRole === 'Super Admin' && roles.includes('Admin'));
         if (!req.user || !isAllowed) {
             return res.status(403).json({

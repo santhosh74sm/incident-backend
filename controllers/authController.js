@@ -126,6 +126,7 @@ const changeStudentPassword = async (req, res, next) => {
             studentId: req.user._id || req.user.id,
             currentPassword: req.body.currentPassword,
             newPassword: req.body.newPassword,
+            confirmPassword: req.body.confirmPassword,
         });
 
         clearRefreshCookie(res);
@@ -146,8 +147,10 @@ const changeStaffPassword = async (req, res, next) => {
             userId: req.user._id || req.user.id,
             currentPassword: req.body.currentPassword,
             newPassword: req.body.newPassword,
+            confirmPassword: req.body.confirmPassword,
         });
 
+        clearRefreshCookie(res);
         setSessionCookies(res, await sessionService.issueSession({
             user: result.user,
             type: 'staff',

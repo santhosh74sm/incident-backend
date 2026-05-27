@@ -13,13 +13,18 @@ const ROLE_MAP = {
     teacher: 'Teacher',
 };
 
+const ADMIN_ROLES = ['Super Admin', 'Admin'];
+const TEACHER_ROLES = ['Teacher', 'teacher'];
+const STAFF_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
+
 const toClientRole = (role) => {
-    if (role === 'teacher') return 'Teacher';
-    if (role === 'super_admin') return 'Super Admin';
-    return role;
+    const normalizedRole = ROLE_MAP[String(role || '').trim().toLowerCase()];
+    return normalizedRole || role;
 };
 
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
+
+const isAdminRole = (role) => ADMIN_ROLES.includes(toClientRole(role));
 
 const getAdminExists = async () => Boolean(await User.exists({ role: { $in: ['Super Admin', 'super_admin'] } }));
 
@@ -226,9 +231,9 @@ const getCurrentUserResponse = (user) => ({
 
 const getAllUsers = async ({ actor } = {}) => {
     const actorRole = toClientRole(actor?.role);
-    const query = actorRole === 'Super Admin'
-        ? {}
-        : { role: { $in: ['Teacher', 'teacher'] } };
+    const query = isAdminRole(actorRole)
+        ? { role: { $in: STAFF_ROLES } }
+        : { role: { $in: TEACHER_ROLES } };
     const users = await User.find(query).select('-password').lean();
     return users.map((user) => ({
         ...user,
@@ -302,13 +307,21 @@ const resetUserPassword = async ({ id, actor }) => {
     };
 };
 
-const changeStaffPassword = async ({ userId, currentPassword, newPassword }) => {
-    if (!currentPassword || !newPassword) {
-        throw new AppError('Current password and new password are required', 400);
+const changeStaffPassword = async ({ userId, currentPassword, newPassword, confirmPassword }) => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+        throw new AppError('Current password, new password, and confirmation are required', 400);
     }
 
     if (newPassword.length < 6) {
         throw new AppError('New password must be at least 6 characters long', 400);
+    }
+
+    if (newPassword !== confirmPassword) {
+        throw new AppError('Passwords do not match', 400);
+    }
+
+    if (currentPassword === newPassword) {
+        throw new AppError('New password must be different from the current password', 400);
     }
 
     const user = await User.findById(userId).exec();
@@ -326,7 +339,17 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword }) => 
 
     return {
         user,
-        response: { message: 'Password changed successfully', mustChangePassword: false },
+        response: {
+            message: 'Password changed successfully',
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email,
+                role: toClientRole(user.role),
+                mustChangePassword: false,
+            },
+            mustChangePassword: false,
+        },
     };
 };
 
@@ -336,13 +359,17 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword }) => 
  * Clears the mustChangePassword flag and increments tokenVersion
  * to invalidate all previous sessions after the change.
  */
-const changeStudentPassword = async ({ studentId, currentPassword, newPassword }) => {
-    if (!currentPassword || !newPassword) {
-        throw new AppError('Current password and new password are required', 400);
+const changeStudentPassword = async ({ studentId, currentPassword, newPassword, confirmPassword }) => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+        throw new AppError('Current password, new password, and confirmation are required', 400);
     }
 
     if (newPassword.length < 6) {
         throw new AppError('New password must be at least 6 characters long', 400);
+    }
+
+    if (newPassword !== confirmPassword) {
+        throw new AppError('Passwords do not match', 400);
     }
 
     if (currentPassword === newPassword) {
@@ -365,6 +392,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword }
     student.tokenVersion = (student.tokenVersion ?? 0) + 1;
     student.passwordChangedAt = new Date();
     await student.save();
+    await revokeUserSessions({ userId: student._id, type: 'student' });
 
     createLog(
         'STUDENT_PASSWORD_CHANGED',
@@ -376,7 +404,17 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword }
 
     return {
         user: student,
-        response: { message: 'Password changed successfully', mustChangePassword: false },
+        response: {
+            message: 'Password changed successfully',
+            user: {
+                _id: student._id,
+                name: student.name,
+                role: 'Student',
+                admissionNo: student.admissionNo,
+                mustChangePassword: false,
+            },
+            mustChangePassword: false,
+        },
     };
 };
 

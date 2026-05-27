@@ -36,12 +36,11 @@ const userSchema = new mongoose.Schema(
         },
 
         // Normalised staff role. Lowercase variants are retained for legacy documents.
-        // 'teacher' (lowercase) is kept in the enum for backward-compat with any
-        // existing documents; authMiddleware normalises it to 'Teacher' on every
-        // authenticated request so the rest of the app only sees the capitalised form.
+        // Lowercase variants are kept for backward-compat with existing documents;
+        // authMiddleware normalises them on every authenticated request.
         role: {
             type: String,
-            enum: ['Super Admin', 'Admin', 'Teacher', 'teacher', 'super_admin'],
+            enum: ['Super Admin', 'Admin', 'Teacher', 'teacher', 'admin', 'super_admin'],
             required: true,
         },
 
