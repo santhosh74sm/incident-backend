@@ -31,9 +31,7 @@ const {
 } = require('../validators/authValidators');
 const { objectIdParamSchema } = require('../validators/commonValidators');
 const { authSensitiveRateLimiter } = require('../middleware/rateLimit.middleware');
-const { issueCsrfToken } = require('../middleware/csrf.middleware');
 
-router.get('/csrf-token', issueCsrfToken);
 router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
 router.post('/register', validate(registerSchema), registerUser);

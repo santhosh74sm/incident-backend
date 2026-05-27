@@ -11,10 +11,7 @@ const errorHandler = (err, req, res, next) => {
     let validationErrors;
     const isProduction = process.env.NODE_ENV === 'production';
 
-    if (err.code === 'EBADCSRFTOKEN') {
-        statusCode = 419;
-        message = 'Security check failed. Please refresh the page and try again.';
-    } else if (err.name === 'CastError' || err.name === 'BSONError') {
+    if (err.name === 'CastError' || err.name === 'BSONError') {
         statusCode = 400;
         message = 'Some search details are not valid.';
     } else if (err.name === 'ValidationError' && err.errors) {
@@ -48,10 +45,6 @@ const errorHandler = (err, req, res, next) => {
     const payload = {
         message: statusCode >= 500 && isProduction ? 'Internal server error' : message,
     };
-
-    if (statusCode === 419) {
-        payload.code = 'CSRF_TOKEN_INVALID';
-    }
 
     if (statusCode === 400 && validationErrors) {
         payload.errors = validationErrors;
