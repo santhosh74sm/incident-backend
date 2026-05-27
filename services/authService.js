@@ -2,10 +2,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Student = require('../models/Student');
-const Notification = require('../models/Notification');
-const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { createLog } = require('../utils/logger');
-const { sendPasswordResetOtpEmail } = require('./emailService');
 const { revokeUserSessions } = require('./sessionService');
 const AppError = require('../utils/AppError');
 
@@ -16,12 +13,6 @@ const ROLE_MAP = {
     teacher: 'Teacher',
 };
 
-const hashResetValue = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
-
-// Read lazily at call-time so dotenv is always fully loaded first.
-const getOtpExpiryMs = () =>
-    Math.max(1000, Number(process.env.PASSWORD_RESET_OTP_EXPIRY_MS) || 2 * 60 * 1000);
-
 const toClientRole = (role) => {
     if (role === 'teacher') return 'Teacher';
     if (role === 'super_admin') return 'Super Admin';
@@ -31,6 +22,45 @@ const toClientRole = (role) => {
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
 
 const getAdminExists = async () => Boolean(await User.exists({ role: { $in: ['Super Admin', 'super_admin'] } }));
+
+const ensureCanCreateRole = (actorRole, targetRole) => {
+    if (actorRole === 'Super Admin') {
+        if (targetRole === 'Super Admin') {
+            throw new AppError('Additional Super Admin accounts cannot be created here.', 403);
+        }
+        return;
+    }
+
+    if (actorRole === 'Admin') {
+        if (targetRole !== 'Teacher') {
+            throw new AppError('Admins can create Teacher accounts only.', 403);
+        }
+        return;
+    }
+
+    throw new AppError('Only administrators can create staff accounts.', 403);
+};
+
+const ensureCanManageUser = (actor, targetUser, actionLabel = 'manage') => {
+    const actorRole = toClientRole(actor?.role);
+    const targetRole = toClientRole(targetUser?.role);
+    const actorId = String(actor?._id || actor?.id || '');
+    const targetId = String(targetUser?._id || targetUser?.id || '');
+
+    if (actorRole === 'Super Admin') {
+        return;
+    }
+
+    if (actorRole === 'Admin' && targetRole === 'Teacher') {
+        return;
+    }
+
+    if (actorId && actorId === targetId && actionLabel === 'change password') {
+        return;
+    }
+
+    throw new AppError(`Admins cannot ${actionLabel} ${targetRole || 'this account'} accounts.`, 403);
+};
 
 const registerUser = async ({ input, actor }) => {
     const { name, email, password, role, class: userClass } = input;
@@ -55,15 +85,7 @@ const registerUser = async ({ input, actor }) => {
             throw new AppError('Invalid staff role', 400);
         }
 
-        const requesterRole = toClientRole(actor?.role);
-
-        if (!['Super Admin', 'Admin'].includes(requesterRole)) {
-            throw new AppError('Only administrators can create staff accounts.', 403);
-        }
-
-        if (normalizedRole === 'Super Admin') {
-            throw new AppError('Additional Super Admin accounts cannot be created here.', 403);
-        }
+        ensureCanCreateRole(toClientRole(actor?.role), normalizedRole);
 
     }
 
@@ -80,6 +102,7 @@ const registerUser = async ({ input, actor }) => {
         role: normalizedRole,
         class: userClass || '',
         mustChangePassword: Boolean(actor),
+        passwordChangedAt: null,
     });
 
     if (!user) {
@@ -99,7 +122,7 @@ const registerUser = async ({ input, actor }) => {
         },
         {
             type: 'USER_REGISTERED',
-            recipientRoles: ['Admin'],
+            recipientRoles: ['Super Admin', 'Admin'],
             targetLabel: user.name,
             routePath: '/user-management',
             targetAdmissionNumber: null,
@@ -116,119 +139,6 @@ const registerUser = async ({ input, actor }) => {
             mustChangePassword: user.mustChangePassword,
         },
     };
-};
-
-const createPasswordResetNotification = async (user, request) => {
-    const superAdmins = await User.find({ role: { $in: ['Super Admin', 'super_admin'] } }).select('_id').lean();
-    if (superAdmins.length === 0) return;
-
-    await Notification.insertMany(
-        superAdmins.map((admin) => ({
-            recipient: admin._id,
-            type: 'PASSWORD_RESET_REQUEST',
-            entityType: 'User',
-            entityId: String(request._id),
-            actionName: 'PASSWORD_RESET_REQUEST',
-            message: `${user.name} requested a password reset.`,
-            performedBy: String(user._id),
-            performedByName: user.name,
-            performedByRole: toClientRole(user.role),
-            targetLabel: user.name,
-            routePath: '/user-management',
-            metadata: { requestId: String(request._id), email: user.email },
-        }))
-    );
-};
-
-const requestPasswordResetOtp = async ({ email }) => {
-    if (!email) {
-        throw new AppError('Email is required', 400);
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail }).select('_id email name role').exec();
-
-    if (!user) {
-        throw new AppError('We could not find a staff account with this email.', 404);
-    }
-
-    const existing = await PasswordResetRequest.findOne({ user: user._id, status: 'pending' }).exec();
-    const request = existing || await PasswordResetRequest.create({
-        user: user._id,
-        email: normalizedEmail,
-    });
-
-    if (!existing) {
-        createPasswordResetNotification(user, request).catch(() => {});
-    }
-
-    return { message: 'Password reset request sent to the Super Admin.' };
-};
-
-const verifyPasswordResetOtp = async ({ email, otp }) => {
-    if (!email || !otp) {
-        throw new AppError('Email and reset code are required', 400);
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const passwordResetOtp = hashResetValue(`${normalizedEmail}:${String(otp).trim()}`);
-
-    const user = await User.findOne({
-        email: normalizedEmail,
-        passwordResetOtp,
-        passwordResetOtpExpires: { $gt: Date.now() },
-    });
-
-    if (!user) {
-        throw new AppError('The reset code is incorrect or has expired.', 400);
-    }
-
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    user.passwordResetVerifiedToken = hashResetValue(resetToken);
-    user.passwordResetVerifiedExpires = Date.now() + 1000 * 60 * 10;
-    user.passwordResetOtp = undefined;
-    user.passwordResetOtpExpires = undefined;
-    await user.save();
-
-    return { message: 'Reset code verified successfully', resetToken };
-};
-
-const resetPassword = async ({ token, password }) => {
-    if (!token || !password) {
-        throw new AppError('Reset token and new password are required', 400);
-    }
-
-    if (password.length < 6) {
-        throw new AppError('New password must be at least 6 characters long', 400);
-    }
-
-    const user = await User.findOne({
-        passwordResetVerifiedToken: hashResetValue(token),
-        passwordResetVerifiedExpires: { $gt: Date.now() },
-    });
-
-    if (!user) {
-        throw new AppError('Password reset verification is invalid or has expired', 400);
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
-    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-    user.passwordResetOtp = undefined;
-    user.passwordResetOtpExpires = undefined;
-    user.passwordResetVerifiedToken = undefined;
-    user.passwordResetVerifiedExpires = undefined;
-    await user.save();
-
-    createLog(
-        'PASSWORD_RESET',
-        user._id,
-        'System',
-        user._id,
-        { Name: user.name, Role: user.role, targetLabel: user.name }
-    );
-
-    return { message: 'Password updated successfully' };
 };
 
 const loginStaff = async ({ email, password }) => {
@@ -314,8 +224,12 @@ const getCurrentUserResponse = (user) => ({
     mustChangePassword: user.mustChangePassword,
 });
 
-const getAllUsers = async () => {
-    const users = await User.find({}).select('-password').lean();
+const getAllUsers = async ({ actor } = {}) => {
+    const actorRole = toClientRole(actor?.role);
+    const query = actorRole === 'Super Admin'
+        ? {}
+        : { role: { $in: ['Teacher', 'teacher'] } };
+    const users = await User.find(query).select('-password').lean();
     return users.map((user) => ({
         ...user,
         role: toClientRole(user.role),
@@ -329,9 +243,7 @@ const deleteUser = async ({ id, actor }) => {
         throw new AppError('Staff member not found', 404);
     }
 
-    if (toClientRole(user.role) === 'Super Admin') {
-        throw new AppError('Super Admin accounts cannot be deleted from this screen.', 403);
-    }
+    ensureCanManageUser(actor, user, 'delete');
 
     await revokeUserSessions({ userId: user._id, type: 'staff' });
     await user.deleteOne();
@@ -347,41 +259,19 @@ const deleteUser = async ({ id, actor }) => {
     return { message: 'Staff member removed' };
 };
 
-const generateTemporaryPassword = () => `Reset-${crypto.randomBytes(4).toString('hex')}`;
-
-const getPasswordResetRequests = async () => {
-    const requests = await PasswordResetRequest.find({ status: 'pending' })
-        .populate('user', 'name email role')
-        .sort({ createdAt: -1 })
-        .lean();
-
-    return requests.map((request) => ({
-        _id: request._id,
-        email: request.email,
-        status: request.status,
-        requestedAt: request.requestedAt || request.createdAt,
-        user: request.user ? {
-            _id: request.user._id,
-            name: request.user.name,
-            email: request.user.email,
-            role: toClientRole(request.user.role),
-        } : null,
-    }));
+const generateTemporaryPassword = () => {
+    const prefixes = ['Temp', 'Staff'];
+    return `${prefixes[crypto.randomInt(0, prefixes.length)]}@${crypto.randomInt(1000, 10000)}`;
 };
 
-const completePasswordResetRequest = async ({ requestId, actor }) => {
-    const request = await PasswordResetRequest.findById(requestId).exec();
-    if (!request || request.status !== 'pending') {
-        throw new AppError('Password reset request not found', 404);
+const resetUserPassword = async ({ id, actor }) => {
+    const user = await User.findById(id).exec();
+    if (!user) {
+        throw new AppError('Staff member not found', 404);
     }
 
-    const user = await User.findById(request.user).exec();
-    if (!user) {
-        request.status = 'rejected';
-        request.completedAt = new Date();
-        request.completedBy = actor._id || actor.id;
-        await request.save();
-        throw new AppError('User no longer exists', 404);
+    if (toClientRole(actor?.role) !== 'Super Admin') {
+        throw new AppError('Only Super Admin can reset staff passwords.', 403);
     }
 
     const temporaryPassword = generateTemporaryPassword();
@@ -389,14 +279,9 @@ const completePasswordResetRequest = async ({ requestId, actor }) => {
     user.password = await bcrypt.hash(temporaryPassword, salt);
     user.mustChangePassword = true;
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    user.passwordChangedAt = new Date();
     await user.save();
     await revokeUserSessions({ userId: user._id, type: 'staff' });
-
-    request.status = 'completed';
-    request.completedAt = new Date();
-    request.completedBy = actor._id || actor.id;
-    request.temporaryPasswordHash = hashResetValue(temporaryPassword);
-    await request.save();
 
     createLog('PASSWORD_RESET_BY_SUPER_ADMIN', getActorId(actor), 'System', user._id, {
         Name: user.name,
@@ -407,21 +292,14 @@ const completePasswordResetRequest = async ({ requestId, actor }) => {
     return {
         message: 'Temporary password generated. Share it with the user through a trusted channel.',
         temporaryPassword,
-        user: { _id: user._id, name: user.name, email: user.email, role: toClientRole(user.role) },
+        user: {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: toClientRole(user.role),
+            mustChangePassword: user.mustChangePassword,
+        },
     };
-};
-
-const rejectPasswordResetRequest = async ({ requestId, actor }) => {
-    const request = await PasswordResetRequest.findById(requestId).exec();
-    if (!request || request.status !== 'pending') {
-        throw new AppError('Password reset request not found', 404);
-    }
-
-    request.status = 'rejected';
-    request.completedAt = new Date();
-    request.completedBy = actor._id || actor.id;
-    await request.save();
-    return { message: 'Password reset request rejected.' };
 };
 
 const changeStaffPassword = async ({ userId, currentPassword, newPassword }) => {
@@ -442,6 +320,7 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword }) => 
     user.password = await bcrypt.hash(newPassword, salt);
     user.mustChangePassword = false;
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    user.passwordChangedAt = new Date();
     await user.save();
     await revokeUserSessions({ userId: user._id, type: 'staff' });
 
@@ -484,6 +363,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword }
     student.password = await bcrypt.hash(newPassword, salt);
     student.mustChangePassword = false;
     student.tokenVersion = (student.tokenVersion ?? 0) + 1;
+    student.passwordChangedAt = new Date();
     await student.save();
 
     createLog(
@@ -504,16 +384,11 @@ module.exports = {
     toClientRole,
     getAdminExists,
     registerUser,
-    requestPasswordResetOtp,
-    verifyPasswordResetOtp,
-    resetPassword,
     loginUser,
     getCurrentUserResponse,
     getAllUsers,
     deleteUser,
-    getPasswordResetRequests,
-    completePasswordResetRequest,
-    rejectPasswordResetRequest,
+    resetUserPassword,
     changeStaffPassword,
     changeStudentPassword,
 };

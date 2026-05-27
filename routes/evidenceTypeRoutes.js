@@ -15,8 +15,8 @@ const { objectIdParamSchema } = require('../validators/commonValidators');
 router.get('/', getEvidenceTypes);
 
 // Admin and Teacher routes
-router.post('/', protect, authorize('Admin', 'Teacher'), validate(evidenceTypeSchema), addEvidenceType);
-router.put('/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(evidenceTypeSchema), updateEvidenceType);
-router.delete('/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteEvidenceType);
+router.post('/', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(evidenceTypeSchema), addEvidenceType);
+router.put('/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(evidenceTypeSchema), updateEvidenceType);
+router.delete('/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteEvidenceType);
 
 module.exports = router;

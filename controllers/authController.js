@@ -57,36 +57,6 @@ const createStaffUser = async (req, res, next) => {
     }
 };
 
-const requestPasswordResetOtp = async (req, res, next) => {
-    try {
-        res.json(await authService.requestPasswordResetOtp(req.body));
-    } catch (error) {
-        // Replace any technical SMTP message with a school-friendly one
-        if (!error.statusCode || error.statusCode >= 500) {
-            error.message =
-                'The email service is temporarily unavailable. Please contact the administrator.';
-            error.statusCode = 503;
-        }
-        next(error);
-    }
-};
-
-const verifyPasswordResetOtp = async (req, res, next) => {
-    try {
-        res.json(await authService.verifyPasswordResetOtp(req.body));
-    } catch (error) {
-        next(error);
-    }
-};
-
-const resetPassword = async (req, res, next) => {
-    try {
-        res.json(await authService.resetPassword(req.body));
-    } catch (error) {
-        next(error);
-    }
-};
-
 const loginUser = async (req, res, next) => {
     try {
         const result = await authService.loginUser(req.body);
@@ -127,7 +97,7 @@ const logoutUser = async (req, res) => {
 
 const getAllUsers = async (req, res, next) => {
     try {
-        res.json(await authService.getAllUsers());
+        res.json(await authService.getAllUsers({ actor: req.user }));
     } catch (error) {
         next(error);
     }
@@ -189,29 +159,10 @@ const changeStaffPassword = async (req, res, next) => {
     }
 };
 
-const getPasswordResetRequests = async (req, res, next) => {
+const resetUserPassword = async (req, res, next) => {
     try {
-        res.json(await authService.getPasswordResetRequests());
-    } catch (error) {
-        next(error);
-    }
-};
-
-const completePasswordResetRequest = async (req, res, next) => {
-    try {
-        res.json(await authService.completePasswordResetRequest({
-            requestId: req.params.id,
-            actor: req.user,
-        }));
-    } catch (error) {
-        next(error);
-    }
-};
-
-const rejectPasswordResetRequest = async (req, res, next) => {
-    try {
-        res.json(await authService.rejectPasswordResetRequest({
-            requestId: req.params.id,
+        res.json(await authService.resetUserPassword({
+            id: req.params.id,
             actor: req.user,
         }));
     } catch (error) {
@@ -229,12 +180,7 @@ module.exports = {
     deleteUser,
     getMe,
     logoutUser,
-    requestPasswordResetOtp,
-    verifyPasswordResetOtp,
-    resetPassword,
-    getPasswordResetRequests,
-    completePasswordResetRequest,
-    rejectPasswordResetRequest,
+    resetUserPassword,
     changeStaffPassword,
     changeStudentPassword,
 };

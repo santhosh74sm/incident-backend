@@ -11,7 +11,7 @@ const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
 
 const ensureOptionManager = (actor, message = 'Access Denied') => {
-    if (!['Admin', 'Teacher', 'admin', 'teacher'].includes(actor?.role)) {
+    if (!['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'].includes(actor?.role)) {
         throw new AppError(message, 403);
     }
 };

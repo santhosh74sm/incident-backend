@@ -38,6 +38,10 @@ const studentSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        passwordChangedAt: {
+            type: Date,
+            default: null,
+        },
     },
     { timestamps: true }
 );

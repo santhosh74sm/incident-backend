@@ -29,6 +29,9 @@ const s3StorageService = require('./s3StorageService');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
+const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
+const isAdministrationRole = (role) => ADMIN_ROLES.includes(role);
 
 const buildAlternationRegex = (values) => {
     const parts = Array.from(values).map(escapeRegex);
@@ -206,21 +209,21 @@ const buildIncidentQuery = async (user, query) => {
 
     if (staff.length > 0 || includeUnassigned || includeAdminRole) {
         try {
-            const isAdminSelectedByKeyword = staff.some((e) => e.toLowerCase() === 'admin');
+            const isAdminSelectedByKeyword = staff.some((e) => ADMIN_KEYWORDS.includes(e.toLowerCase()));
             const validStaffIds = staff
-                .filter((e) => e.toLowerCase() !== 'admin')
+                .filter((e) => !ADMIN_KEYWORDS.includes(e.toLowerCase()))
                 .filter((e) => mongoose.Types.ObjectId.isValid(e))
                 .map((e) => new mongoose.Types.ObjectId(e));
 
             const selectedAdminUsers = validStaffIds.length > 0
-                ? await User.find({ _id: { $in: validStaffIds }, role: 'Admin' }).select('_id').lean()
+                ? await User.find({ _id: { $in: validStaffIds }, role: { $in: ADMIN_ROLES } }).select('_id').lean()
                 : [];
             const isAdminSelectedById = selectedAdminUsers.length > 0;
             const needsAdminUserIds = includeUnassigned || includeAdminRole || isAdminSelectedByKeyword || isAdminSelectedById;
 
             let allAdminIds = [];
             if (needsAdminUserIds) {
-                const adminUsers = await User.find({ role: { $in: ['Admin', 'admin'] } }).select('_id').lean();
+                const adminUsers = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
                 allAdminIds = adminUsers.map((u) => u._id);
             }
 
@@ -301,8 +304,8 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
 
 const dispatchIncidentCreatedNotifications = async (incidents, user) => {
     const reporterId = user.id;
-    const isAdmin = user.role === 'Admin';
-    const admins = await User.find({ role: 'Admin' }).select('_id').lean();
+    const isAdmin = isAdministrationRole(user.role);
+    const admins = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
 
     const allNotifications = [];
 
@@ -390,7 +393,7 @@ const createIncidents = async ({ body, files, user }) => {
     try { evidenceList = JSON.parse(body.evidenceDetails || '[]'); } catch { evidenceList = []; }
     const evidence = buildEvidenceEntriesFromUploads(files || [], evidenceList);
 
-    const isAdmin = user.role === 'Admin';
+    const isAdmin = isAdministrationRole(user.role);
     const cls = Array.isArray(body.class) ? body.class[0] : body.class;
     const sec = Array.isArray(body.section) ? body.section[0] : body.section;
 
@@ -681,7 +684,7 @@ const addProgressNote = async (incidentId, note, user) => {
     const progressActionName = movedToInProgress ? 'Incident Moved to In Progress' : 'Progress Log Added';
     const handlerId = incident.assignedHandler?._id || incident.assignedHandler;
 
-    const progressNotificationConfig = user.role === 'Admin'
+    const progressNotificationConfig = isAdministrationRole(user.role)
         ? {
             recipientEntries: [
                 handlerId ? {
@@ -692,7 +695,7 @@ const addProgressNote = async (incidentId, note, user) => {
                 } : null,
             ].filter(Boolean),
         }
-        : { recipientRoles: ['Admin'], message: `${user.name} added a progress update to "${incident.title}".` };
+        : { recipientRoles: ['Super Admin', 'Admin'], message: `${user.name} added a progress update to "${incident.title}".` };
 
     createLog(
         progressActionName,
@@ -721,7 +724,7 @@ const requestClosure = async (incidentId, actionTaken, user) => {
     await incident.save();
 
     createLog('Closure Requested', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { actionTaken: actionTaken || null, status: incident.status, closureRequested: true }), {
-        type: 'CLOSURE_REQUESTED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), recipientRoles: ['Admin'], message: `${user.name} requested closure for "${incident.title}".`,
+        type: 'CLOSURE_REQUESTED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), recipientRoles: ['Super Admin', 'Admin'], message: `${user.name} requested closure for "${incident.title}".`,
     });
 
     return { message: 'Closure requested' };
@@ -1121,7 +1124,7 @@ const processExcelUpload = async (filePath, user, body) => {
 
     // Notify admins via SSE
     try {
-        const admins = await User.find({ role: 'Admin' }).select('_id').lean();
+        const admins = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
         const notifications = admins
             .filter((a) => a._id.toString() !== user.id.toString())
             .map((a) => ({
@@ -1157,8 +1160,8 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
 
     const templateData = [
         ['admissionNumber*', 'category*', 'location*', 'description*', 'evidenceType*', 'handledBy', 'day*', 'month*', 'year*', 'hour*', 'minute*', 'timePeriod (AM/PM)', 'highPriority (Yes/No)'],
-        [students[0]?.admissionNo || '21295', categories[0]?.name || 'Argument', locations[0]?.name || 'Class', 'Student was involved in an argument during class time', evidenceTypes[0]?.name || 'Parent Letter', users.find((u) => u.role === 'Admin')?.email || 'teacher@school.edu', '9', '3', '2026', '10', '30', 'AM', 'No'],
-        [students[1]?.admissionNo || '21296', categories[1]?.name || 'Bullying', locations[1]?.name || 'Playground', 'Student was found bullying another student during recess', evidenceTypes[1]?.name || 'Warning Letter', users.find((u) => u.role === 'Admin')?.email || 'teacher@school.edu', '10', '3', '2026', '2', '45', 'PM', 'Yes'],
+        [students[0]?.admissionNo || '21295', categories[0]?.name || 'Argument', locations[0]?.name || 'Class', 'Student was involved in an argument during class time', evidenceTypes[0]?.name || 'Parent Letter', users.find((u) => isAdministrationRole(u.role))?.email || 'teacher@school.edu', '9', '3', '2026', '10', '30', 'AM', 'No'],
+        [students[1]?.admissionNo || '21296', categories[1]?.name || 'Bullying', locations[1]?.name || 'Playground', 'Student was found bullying another student during recess', evidenceTypes[1]?.name || 'Warning Letter', users.find((u) => isAdministrationRole(u.role))?.email || 'teacher@school.edu', '10', '3', '2026', '2', '45', 'PM', 'Yes'],
         ['', '', '', '', '', '', '', '', '', '', '', '', ''],
     ];
 

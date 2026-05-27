@@ -18,14 +18,14 @@ router.get('/all', protect, getAllStudents);  // unpaginated — for dropdowns
 
 // ─── Collection route (paginated) ────────────────────────────────────────────
 router.get('/', protect, validate(paginationQuerySchema, 'query'), getAllStudents);
-router.post('/', protect, authorize('Admin', 'Teacher'), validate(createStudentSchema), createStudent);
+router.post('/', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(createStudentSchema), createStudent);
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
-router.post('/upload', protect, authorize('Admin', 'Teacher'), upload.local.single('file'), upload.validateFileTypes, uploadStudents);
+router.post('/upload', protect, authorize('Super Admin', 'Admin', 'Teacher'), upload.local.single('file'), upload.validateFileTypes, uploadStudents);
 
 // ─── Dynamic ID routes ────────────────────────────────────────────────────────
 router.get('/:id/behavioral-summary', protect, validate(objectIdParamSchema, 'params'), getStudentBehavioralSummary);
-router.put('/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(updateStudentSchema), updateStudent);
-router.delete('/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteStudent);
+router.put('/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(updateStudentSchema), updateStudent);
+router.delete('/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteStudent);
 
 module.exports = router;

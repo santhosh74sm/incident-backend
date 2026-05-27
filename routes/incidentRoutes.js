@@ -49,14 +49,14 @@ const { nameSchema } = require('../validators/optionValidators');
 
 // ─── Static reference data routes ────────────────────────────────────────────
 router.get('/categories', protect, getCategories);
-router.post('/categories', protect, authorize('Admin', 'Teacher'), validate(nameSchema), addCategory);
-router.put('/categories/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(nameSchema), updateCategory);
-router.delete('/categories/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteCategory);
+router.post('/categories', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(nameSchema), addCategory);
+router.put('/categories/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(nameSchema), updateCategory);
+router.delete('/categories/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteCategory);
 
 router.get('/locations', protect, getLocations);
-router.post('/locations', protect, authorize('Admin', 'Teacher'), validate(nameSchema), addLocation);
-router.put('/locations/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(nameSchema), updateLocation);
-router.delete('/locations/:id', protect, authorize('Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteLocation);
+router.post('/locations', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(nameSchema), addLocation);
+router.put('/locations/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(nameSchema), updateLocation);
+router.delete('/locations/:id', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteLocation);
 
 // ─── Distinct filters (static — must precede /:id) ───────────────────────────
 router.get('/classes', protect, async (req, res, next) => {
@@ -103,17 +103,17 @@ router
 
 // ─── Single incident — must be defined BEFORE workflow sub-routes ─────────────
 router.get('/:id', protect, validate(objectIdParamSchema, 'params'), getIncidentById);
-router.delete('/:id', protect, authorize('Admin'), validate(objectIdParamSchema, 'params'), deleteIncident);
+router.delete('/:id', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), deleteIncident);
 
 // ─── Export Case Report ───────────────────────────────────────────────────────
 router.get('/:id/export-report', protect, validate(objectIdParamSchema, 'params'), exportIncidentReport);
 
 // ─── Workflow transitions (PUT — aligned with frontend apiClient) ─────────────
-router.put('/:id/approve', protect, authorize('Admin'), validate(objectIdParamSchema, 'params'), validate(approveAndAssignSchema), approveAndAssign);
+router.put('/:id/approve', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(approveAndAssignSchema), approveAndAssign);
 router.put('/:id/progress', protect, validate(objectIdParamSchema, 'params'), validate(progressNoteSchema), addProgressNote);
 router.put('/:id/request-closure', protect, validate(objectIdParamSchema, 'params'), validate(requestClosureSchema), requestClosure);
-router.put('/:id/finalize-closure', protect, authorize('Admin'), validate(objectIdParamSchema, 'params'), validate(finalizeClosureSchema), finalizeClosure);
-router.put('/:id/reject-closure', protect, authorize('Admin'), validate(objectIdParamSchema, 'params'), validate(rejectClosureSchema), rejectClosure);
+router.put('/:id/finalize-closure', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(finalizeClosureSchema), finalizeClosure);
+router.put('/:id/reject-closure', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(rejectClosureSchema), rejectClosure);
 
 // ─── Evidence upload ──────────────────────────────────────────────────────────
 router.put(

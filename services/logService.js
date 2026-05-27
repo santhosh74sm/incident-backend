@@ -7,6 +7,7 @@ const DEFAULT_NOTIFICATION_LIMIT = 12;
 const MAX_NOTIFICATION_LIMIT = 25;
 
 const NOTIFICATION_ENTITY_TYPES = {
+    'Super Admin': ['Incident', 'Letter', 'Template', 'Student', 'Bulk Upload', 'Analytics', 'System', 'Category', 'Location', 'EvidenceType'],
     Admin: ['Incident', 'Letter', 'Template', 'Student', 'Bulk Upload', 'Analytics', 'System', 'Category', 'Location', 'EvidenceType'],
     Teacher: ['Incident', 'Letter', 'Analytics'],
 };

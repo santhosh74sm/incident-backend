@@ -257,7 +257,7 @@ const createStudent = async ({ input, actor }) => {
         },
         {
             type: 'STUDENT_REGISTERED',
-            recipientRoles: ['Admin'],
+            recipientRoles: ['Super Admin', 'Admin'],
             targetLabel: student.name,
             targetAdmissionNumber: student.admissionNo,
             routePath: `/student-analytics/${student.admissionNo}`,

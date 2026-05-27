@@ -30,6 +30,10 @@ const userSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        passwordChangedAt: {
+            type: Date,
+            default: null,
+        },
 
         // Normalised staff role. Lowercase variants are retained for legacy documents.
         // 'teacher' (lowercase) is kept in the enum for backward-compat with any
@@ -46,11 +50,6 @@ const userSchema = new mongoose.Schema(
             default: '',
         },
 
-        // Password-reset OTP flow
-        passwordResetOtp: { type: String, default: undefined },
-        passwordResetOtpExpires: { type: Date, default: undefined },
-        passwordResetVerifiedToken: { type: String, default: undefined },
-        passwordResetVerifiedExpires: { type: Date, default: undefined },
     },
     { timestamps: true }
 );

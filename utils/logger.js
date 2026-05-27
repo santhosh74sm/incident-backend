@@ -133,6 +133,8 @@ const resolveRecipientEntries = async (notificationConfig = {}, actorId = null) 
 
     if (Array.isArray(notificationConfig.recipientRoles) && notificationConfig.recipientRoles.length > 0) {
         const recipientRoles = new Set(notificationConfig.recipientRoles);
+        if (recipientRoles.has('Admin')) recipientRoles.add('Super Admin');
+        if (recipientRoles.has('Super Admin')) recipientRoles.add('super_admin');
         if (recipientRoles.has('Teacher')) recipientRoles.add('teacher');
         const users = await User.find({ role: { $in: Array.from(recipientRoles) } })
             .select('_id')

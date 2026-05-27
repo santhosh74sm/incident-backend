@@ -5,10 +5,10 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
 const { paginationQuerySchema } = require('../validators/commonValidators');
 
-router.get('/notifications', protect, authorize('Admin', 'Teacher'), validate(paginationQuerySchema, 'query'), getNotificationFeed);
+router.get('/notifications', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(paginationQuerySchema, 'query'), getNotificationFeed);
 
 router.route('/')
-    .get(protect, authorize('Admin'), validate(paginationQuerySchema, 'query'), getLogs)
-    .delete(protect, authorize('Admin'), clearLogs);
+    .get(protect, authorize('Super Admin', 'Admin'), validate(paginationQuerySchema, 'query'), getLogs)
+    .delete(protect, authorize('Super Admin', 'Admin'), clearLogs);
 
 module.exports = router;

@@ -35,14 +35,12 @@ const envSchema = z.object({
     RATE_LIMIT_MAX: z.string().optional(),
     AUTH_RATE_LIMIT_WINDOW_MS: z.string().optional(),
     AUTH_RATE_LIMIT_MAX: z.string().optional(),
-    PASSWORD_RESET_OTP_EXPIRY_MS: z.string().optional(),
     JSON_BODY_LIMIT: z.string().default('10mb'),
     URLENCODED_BODY_LIMIT: z.string().default('10mb'),
     UPLOAD_MAX_FILE_SIZE_BYTES: z.string().optional(),
     UPLOAD_MAX_FILES: z.string().optional(),
     KEEP_ALIVE_TIMEOUT_MS: z.string().optional(),
     HEADERS_TIMEOUT_MS: z.string().optional(),
-    RESEND_API_KEY: z.string().optional(),
 }).superRefine((env, ctx) => {
     if (!env.JWT_SECRET_STAFF) {
         ctx.addIssue({
@@ -86,14 +84,6 @@ const envSchema = z.object({
                 code: z.ZodIssueCode.custom,
                 path: ['CORS_ORIGIN'],
                 message: 'CORS_ORIGIN is required in production',
-            });
-        }
-
-        if (!env.RESEND_API_KEY) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['RESEND_API_KEY'],
-                message: 'RESEND_API_KEY is required in production for password reset emails',
             });
         }
     }
