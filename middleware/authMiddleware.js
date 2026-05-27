@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Student = require('../models/Student');
 const env = require('../config/env');
+const { clearAuthCookie, clearSessionCookies } = require('../config/authCookies');
 
 const SECRETS = {
     staff: env.JWT_SECRET_STAFF,
@@ -11,6 +12,9 @@ const SECRETS = {
 const normalizeRoleForApp = (user) => {
     if (user?.role === 'teacher') {
         user.role = 'Teacher';
+    }
+    if (user?.role === 'super_admin') {
+        user.role = 'Super Admin';
     }
     if (user?._id && !user.id) {
         user.id = user._id.toString();
@@ -34,14 +38,14 @@ const verifyToken = (token) => {
     const tokenType = decodedHeader.type || 'legacy';
 
     if (tokenType === 'student' || tokenType === 'staff') {
-        return jwt.verify(token, SECRETS[tokenType]);
+        return jwt.verify(token, SECRETS[tokenType], { algorithms: ['HS256'] });
     }
 
     if (!env.JWT_SECRET) {
         throw new Error('Legacy token secret unavailable');
     }
 
-    return { ...jwt.verify(token, env.JWT_SECRET), type: 'legacy' };
+    return { ...jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }), type: 'legacy' };
 };
 
 const findUserForToken = async (decoded) => {
@@ -97,7 +101,19 @@ const protect = async (req, res, next) => {
         await attachUser(req, token);
         next();
     } catch (error) {
-        res.status(error.statusCode || 401).json({ message: error.message || 'Please sign in again.' });
+        if (error.name === 'TokenExpiredError') {
+            clearAuthCookie(res);
+            return res.status(401).json({
+                code: 'ACCESS_TOKEN_EXPIRED',
+                message: 'Session needs renewal.',
+            });
+        }
+
+        clearSessionCookies(res);
+        res.status(error.statusCode || 401).json({
+            code: 'AUTH_SESSION_INVALID',
+            message: error.message || 'Please sign in again.',
+        });
     }
 };
 
@@ -112,16 +128,21 @@ const optionalProtect = async (req, res, next) => {
         await attachUser(req, token);
         next();
     } catch (error) {
-        res.status(401).json({ message: 'Please sign in again.' });
+        clearSessionCookies(res);
+        res.status(401).json({
+            code: 'AUTH_SESSION_INVALID',
+            message: 'Please sign in again.',
+        });
     }
 };
 
 const authorize = (...roles) => {
     return (req, res, next) => {
-        const roleMap = { admin: 'Admin', teacher: 'Teacher', student: 'Student' };
+        const roleMap = { admin: 'Admin', teacher: 'Teacher', student: 'Student', super_admin: 'Super Admin' };
         const rawRole = req.user?.role;
         const userRole = typeof rawRole === 'string' ? roleMap[rawRole.toLowerCase()] || rawRole : rawRole;
-        if (!req.user || !roles.includes(userRole)) {
+        const isAllowed = roles.includes(userRole) || (userRole === 'Super Admin' && roles.includes('Admin'));
+        if (!req.user || !isAllowed) {
             return res.status(403).json({
                 message: `Role (${userRole}) is not authorized to access this resource`
             });

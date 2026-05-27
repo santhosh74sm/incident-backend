@@ -13,6 +13,11 @@ const {
     getMe,
     logoutUser,
     changeStudentPassword,
+    refreshSession,
+    changeStaffPassword,
+    getPasswordResetRequests,
+    completePasswordResetRequest,
+    rejectPasswordResetRequest,
 } = require('../controllers/authController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
@@ -26,11 +31,14 @@ const {
 } = require('../validators/authValidators');
 const { objectIdParamSchema } = require('../validators/commonValidators');
 const { authSensitiveRateLimiter } = require('../middleware/rateLimit.middleware');
+const { issueCsrfToken } = require('../middleware/csrf.middleware');
 
+router.get('/csrf-token', issueCsrfToken);
 router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
 router.post('/register', validate(registerSchema), registerUser);
 router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser);
+router.post('/refresh', refreshSession);
 router.post('/logout', logoutUser);
 router.get('/me', protect, getMe);
 router.post('/forgot-password', authSensitiveRateLimiter, validate(forgotPasswordSchema), requestPasswordResetOtp);
@@ -45,9 +53,14 @@ router.post(
     validate(changeStudentPasswordSchema),
     changeStudentPassword
 );
+router.post('/change-password', protect, validate(changeStudentPasswordSchema), changeStaffPassword);
 
-router.post('/users', protect, authorize('Admin'), validate(registerSchema), createStaffUser);
-router.get('/users', protect, authorize('Admin', 'Teacher'), getAllUsers);
-router.delete('/users/:id', protect, authorize('Admin'), validate(objectIdParamSchema, 'params'), deleteUser);
+router.get('/password-reset-requests', protect, authorize('Super Admin'), getPasswordResetRequests);
+router.post('/password-reset-requests/:id/complete', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), completePasswordResetRequest);
+router.post('/password-reset-requests/:id/reject', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), rejectPasswordResetRequest);
+
+router.post('/users', protect, authorize('Super Admin', 'Admin'), validate(registerSchema), createStaffUser);
+router.get('/users', protect, authorize('Super Admin', 'Admin', 'Teacher'), getAllUsers);
+router.delete('/users/:id', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), deleteUser);
 
 module.exports = router;

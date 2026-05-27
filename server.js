@@ -9,6 +9,7 @@ const connectDB = require('./config/db.js');
 const ensureDbReady = require('./middleware/dbReadyMiddleware');
 const errorHandler = require('./middleware/errorHandler.middleware');
 const logger = require('./utils/pinoLogger');
+const { csrfProtection } = require('./middleware/csrf.middleware');
 
 const authRoutes = require('./routes/authRoutes');
 const incidentRoutes = require('./routes/incidentRoutes');
@@ -58,7 +59,7 @@ const corsOptions = {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control', 'X-CSRF-Token'],
     exposedHeaders: ['Content-Disposition', 'X-S3-File-Url'],
     optionsSuccessStatus: 204,
     maxAge: 86400
@@ -78,6 +79,7 @@ app.use('/api', globalApiRateLimiter);
 
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));
 app.use(express.urlencoded({ limit: process.env.URLENCODED_BODY_LIMIT || '10mb', extended: true }));
+app.use('/api', csrfProtection);
 
 app.use('/api/uploads', require('./routes/fileRoutes'));
 

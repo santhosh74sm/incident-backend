@@ -1,26 +1,21 @@
 const generateToken = require('../config/generateToken');
-const env = require('../config/env');
 const authService = require('../services/authService');
-
-const cookieOptions = (type = 'staff') => ({
-    httpOnly: true,
-    secure: true,
-    sameSite: 'none',
-    maxAge: type === 'student' ? 8 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000,
-    path: '/',
-});
+const sessionService = require('../services/sessionService');
+const {
+    setAuthCookie: setCookie,
+    setRefreshCookie,
+    clearAuthCookie,
+    clearRefreshCookie,
+    clearSessionCookies,
+} = require('../config/authCookies');
 
 const setAuthCookie = (res, user, type) => {
-    res.cookie('token', generateToken(user, type), cookieOptions(type));
+    setCookie(res, generateToken(user, type), type);
 };
 
-const clearAuthCookie = (res) => {
-    res.clearCookie('token', {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        path: '/',
-    });
+const setSessionCookies = (res, session) => {
+    setCookie(res, session.accessToken);
+    setRefreshCookie(res, session.refreshToken);
 };
 
 const getAdminExists = async (req, res, next) => {
@@ -38,7 +33,11 @@ const registerUser = async (req, res, next) => {
             actor: null,
         });
 
-        setAuthCookie(res, result.user, 'staff');
+        setSessionCookies(res, await sessionService.issueSession({
+            user: result.user,
+            type: 'staff',
+            req,
+        }));
         res.status(201).json(result.response);
     } catch (error) {
         next(error);
@@ -91,7 +90,11 @@ const resetPassword = async (req, res, next) => {
 const loginUser = async (req, res, next) => {
     try {
         const result = await authService.loginUser(req.body);
-        setAuthCookie(res, result.user, result.tokenType);
+        setSessionCookies(res, await sessionService.issueSession({
+            user: result.user,
+            type: result.tokenType,
+            req,
+        }));
         res.json(result.response);
     } catch (error) {
         next(error);
@@ -102,8 +105,23 @@ const getMe = async (req, res) => {
     res.json(authService.getCurrentUserResponse(req.user));
 };
 
-const logoutUser = (req, res) => {
-    clearAuthCookie(res);
+const refreshSession = async (req, res, next) => {
+    try {
+        const session = await sessionService.rotateRefreshSession({
+            rawRefreshToken: req.cookies?.refreshToken,
+            req,
+        });
+        setSessionCookies(res, session);
+        res.json(authService.getCurrentUserResponse(session.user));
+    } catch (error) {
+        clearSessionCookies(res);
+        next(error);
+    }
+};
+
+const logoutUser = async (req, res) => {
+    await sessionService.revokeRefreshToken(req.cookies?.refreshToken);
+    clearSessionCookies(res);
     res.json({ message: 'Logged out' });
 };
 
@@ -140,8 +158,62 @@ const changeStudentPassword = async (req, res, next) => {
             newPassword: req.body.newPassword,
         });
 
-        setAuthCookie(res, result.user, 'student');
+        clearRefreshCookie(res);
+        setSessionCookies(res, await sessionService.issueSession({
+            user: result.user,
+            type: 'student',
+            req,
+        }));
         res.json(result.response);
+    } catch (error) {
+        next(error);
+    }
+};
+
+const changeStaffPassword = async (req, res, next) => {
+    try {
+        const result = await authService.changeStaffPassword({
+            userId: req.user._id || req.user.id,
+            currentPassword: req.body.currentPassword,
+            newPassword: req.body.newPassword,
+        });
+
+        setSessionCookies(res, await sessionService.issueSession({
+            user: result.user,
+            type: 'staff',
+            req,
+        }));
+        res.json(result.response);
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getPasswordResetRequests = async (req, res, next) => {
+    try {
+        res.json(await authService.getPasswordResetRequests());
+    } catch (error) {
+        next(error);
+    }
+};
+
+const completePasswordResetRequest = async (req, res, next) => {
+    try {
+        res.json(await authService.completePasswordResetRequest({
+            requestId: req.params.id,
+            actor: req.user,
+        }));
+    } catch (error) {
+        next(error);
+    }
+};
+
+const rejectPasswordResetRequest = async (req, res, next) => {
+    try {
+        res.json(await authService.rejectPasswordResetRequest({
+            requestId: req.params.id,
+            actor: req.user,
+        }));
     } catch (error) {
         next(error);
     }
@@ -152,6 +224,7 @@ module.exports = {
     registerUser,
     createStaffUser,
     loginUser,
+    refreshSession,
     getAllUsers,
     deleteUser,
     getMe,
@@ -159,5 +232,9 @@ module.exports = {
     requestPasswordResetOtp,
     verifyPasswordResetOtp,
     resetPassword,
+    getPasswordResetRequests,
+    completePasswordResetRequest,
+    rejectPasswordResetRequest,
+    changeStaffPassword,
     changeStudentPassword,
 };

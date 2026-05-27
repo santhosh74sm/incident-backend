@@ -24,7 +24,8 @@ const generateToken = (user, type = 'staff') => {
         },
         secret,
         {
-            expiresIn: type === 'student' ? '8h' : (env.JWT_EXPIRES_IN || '24h'),
+            algorithm: 'HS256',
+            expiresIn: env.JWT_ACCESS_EXPIRES_IN || '15m',
         }
     );
 };

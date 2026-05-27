@@ -26,14 +26,18 @@ const userSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        mustChangePassword: {
+            type: Boolean,
+            default: false,
+        },
 
-        // Normalised role — only 'Admin' and 'Teacher' are used for staff accounts.
+        // Normalised staff role. Lowercase variants are retained for legacy documents.
         // 'teacher' (lowercase) is kept in the enum for backward-compat with any
         // existing documents; authMiddleware normalises it to 'Teacher' on every
         // authenticated request so the rest of the app only sees the capitalised form.
         role: {
             type: String,
-            enum: ['Admin', 'Teacher', 'teacher'],
+            enum: ['Super Admin', 'Admin', 'Teacher', 'teacher', 'super_admin'],
             required: true,
         },
 
