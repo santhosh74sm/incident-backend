@@ -35,10 +35,23 @@ const registerUser = async (req, res, next) => {
     try {
         const result = await authService.registerUser({
             input: req.body,
-            actor: req.user,
+            actor: null,
         });
 
         setAuthCookie(res, result.user, 'staff');
+        res.status(201).json(result.response);
+    } catch (error) {
+        next(error);
+    }
+};
+
+const createStaffUser = async (req, res, next) => {
+    try {
+        const result = await authService.registerUser({
+            input: req.body,
+            actor: req.user,
+        });
+
         res.status(201).json(result.response);
     } catch (error) {
         next(error);
@@ -137,6 +150,7 @@ const changeStudentPassword = async (req, res, next) => {
 module.exports = {
     getAdminExists,
     registerUser,
+    createStaffUser,
     loginUser,
     getAllUsers,
     deleteUser,
