@@ -8,10 +8,19 @@ const isProduction = env.NODE_ENV === 'production';
 const accessMaxAgeMs = Number(process.env.ACCESS_COOKIE_MAX_AGE_MS) || 15 * 60 * 1000;
 const refreshMaxAgeMs = Number(process.env.REFRESH_COOKIE_MAX_AGE_MS) || 30 * ONE_DAY_MS;
 
+const configuredOrigins = (env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const usesHttpsOrigin = configuredOrigins.some((origin) => origin.startsWith('https://'));
+const forceSecureCookies = process.env.COOKIE_SECURE === 'true';
+const useCrossSiteCookies = isProduction || usesHttpsOrigin || forceSecureCookies;
+
 const baseCookieOptions = () => ({
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    secure: useCrossSiteCookies,
+    sameSite: useCrossSiteCookies ? 'none' : 'lax',
     path: '/',
 });
 
@@ -23,11 +32,6 @@ const getAuthCookieOptions = () => ({
 const getRefreshCookieOptions = () => ({
     ...baseCookieOptions(),
     maxAge: refreshMaxAgeMs,
-});
-
-const getCsrfCookieOptions = () => ({
-    ...baseCookieOptions(),
-    httpOnly: true,
 });
 
 const getClearAuthCookieOptions = () => {
@@ -59,7 +63,6 @@ const clearSessionCookies = (res) => {
 module.exports = {
     getAuthCookieOptions,
     getRefreshCookieOptions,
-    getCsrfCookieOptions,
     getClearAuthCookieOptions,
     setAuthCookie,
     setRefreshCookie,
