@@ -143,7 +143,7 @@ const requestPasswordResetOtp = async ({ email }) => {
                 saveError: saveErr.message,
             });
         }
-        console.error('❌ SMTP ERROR DETAILS:', {
+        console.error('Password reset email delivery failed:', {
             message: error.message,
             code: error.code,
             command: error.command,
@@ -393,3 +393,4 @@ module.exports = {
     deleteUser,
     changeStudentPassword,
 };
+
