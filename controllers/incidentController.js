@@ -28,7 +28,7 @@ const createIncident = async (req, res, next) => {
                 failedCount: failedStudents.length,
                 failedStudents,
                 lettersGenerated: generatedLetters.length,
-                incidents: createdIncidents.map((i) => ({ _id: i._id, admissionNo: i.admissionNo, studentsInvolved: i.studentsInvolved })),
+                incidents: createdIncidents.map((i) => ({ id: i._id, admissionNo: i.admissionNo, studentsInvolved: i.studentsInvolved })),
                 letterGenerated: generatedLetters.length > 0 ? {
                     id: generatedLetters[0]._id,
                     letterNumber: generatedLetters[0].letterNumber,

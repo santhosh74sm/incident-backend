@@ -151,7 +151,7 @@ const registerUser = async ({ input, actor }) => {
     return {
         user,
         response: {
-            _id: user._id,
+            id: user._id,
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
@@ -178,7 +178,7 @@ const loginStaff = async ({ email, password }) => {
     return {
         user,
         response: {
-            _id: user._id,
+            id: user._id,
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
@@ -212,7 +212,7 @@ const loginStudent = async ({ email, password }) => {
     return {
         user: student,
         response: {
-            _id: student._id,
+            id: student._id,
             name: student.name,
             role: 'Student',
             admissionNo: student.admissionNo,
@@ -235,7 +235,7 @@ const loginUser = async ({ email, password, loginType }) => {
 };
 
 const getCurrentUserResponse = (user) => ({
-    _id: user._id,
+    id: user._id || user.id,
     name: user.name,
     email: user.email,
     role: toClientRole(user.role),
@@ -313,7 +313,7 @@ const resetUserPassword = async ({ id, actor }) => {
         message: 'Temporary password generated. Share it with the user through a trusted channel.',
         temporaryPassword,
         user: {
-            _id: user._id,
+            id: user._id,
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
@@ -357,7 +357,7 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
         response: {
             message: 'Password changed successfully',
             user: {
-                _id: user._id,
+                id: user._id,
                 name: user.name,
                 email: user.email,
                 role: toClientRole(user.role),
@@ -422,7 +422,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
         response: {
             message: 'Password changed successfully',
             user: {
-                _id: student._id,
+                id: student._id,
                 name: student.name,
                 role: 'Student',
                 admissionNo: student.admissionNo,
