@@ -131,6 +131,7 @@ router.get(/^\/s3\/(.+)/, protect, async (req, res, next) => {
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', buildContentDisposition({ key, contentType, requestedDisposition }));
         res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         if (object.contentLength) {
             res.setHeader('Content-Length', object.contentLength);
