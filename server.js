@@ -9,6 +9,7 @@ const { csrfProtection } = require('./middleware/csrf.middleware');
 const connectDB = require('./config/db.js');
 const ensureDbReady = require('./middleware/dbReadyMiddleware');
 const errorHandler = require('./middleware/errorHandler.middleware');
+const serializeJsonResponses = require('./middleware/serializeResponse.middleware');
 const logger = require('./utils/pinoLogger');
 
 const authRoutes = require('./routes/authRoutes');
@@ -93,6 +94,7 @@ app.use('/api', globalApiRateLimiter);
 
 app.use(express.json({ limit: env.JSON_BODY_LIMIT || '1mb' }));
 app.use(express.urlencoded({ limit: env.URLENCODED_BODY_LIMIT || '1mb', extended: true }));
+app.use(serializeJsonResponses);
 app.use(csrfProtection);
 
 app.get(['/api/auth/csrf', '/api/auth/csrf-token'], (req, res) => {

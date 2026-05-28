@@ -12,6 +12,7 @@
  */
 
 const logger = require('../utils/pinoLogger');
+const { serializeValue } = require('../utils/serializeResponse');
 
 // Map<userId, Set<res>>
 const clients = new Map();
@@ -40,7 +41,7 @@ const removeClient = (userId, res) => {
  * @param {*}      data   — any JSON-serializable payload
  */
 const formatEvent = (event, data) => {
-    const json = JSON.stringify(data);
+    const json = JSON.stringify(serializeValue(data));
     return `event: ${event}\ndata: ${json}\n\n`;
 };
 

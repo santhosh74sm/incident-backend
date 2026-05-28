@@ -8,6 +8,7 @@
 
 const notificationService = require('../services/notificationService');
 const sseManager = require('../utils/sseManager');
+const { serializeValue } = require('../utils/serializeResponse');
 const logger = require('../utils/pinoLogger');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ const streamNotifications = async (req, res) => {
     // Send current notifications immediately on connect
     try {
         const notifications = await notificationService.getMyNotifications(userId);
-        res.write(`event: init\ndata: ${JSON.stringify(notifications)}\n\n`);
+        res.write(`event: init\ndata: ${JSON.stringify(serializeValue(notifications))}\n\n`);
     } catch {
         res.write(`event: init\ndata: []\n\n`);
     }
