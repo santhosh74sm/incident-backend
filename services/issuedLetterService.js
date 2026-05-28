@@ -18,18 +18,54 @@ const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { letterQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
+const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
+
+const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const toIdString = (value) => {
+    if (!value) return '';
+    if (value._id) return String(value._id);
+    return String(value);
+};
+
+const canAccessIncident = (incident, user) => {
+    if (!incident || !user) return false;
+    if (ADMIN_ROLES.has(user.role)) return true;
+
+    const userId = toIdString(user.id || user._id);
+    if (user.role === 'Teacher') {
+        return [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId);
+    }
+
+    if (user.role === 'Student') {
+        return String(incident.admissionNo || '') === String(user.admissionNo || '');
+    }
+
+    return false;
+};
+
+const assertIncidentLetterAccess = async (incidentId, user) => {
+    const incident = await Incident.findById(incidentId)
+        .select('reportedBy assignedHandler admissionNo')
+        .lean();
+
+    if (!incident) {
+        const err = new Error('Incident not found');
+        err.statusCode = 404;
+        throw err;
+    }
+
+    if (!canAccessIncident(incident, user)) {
+        const err = new Error('You are not allowed to access letters for this incident.');
+        err.statusCode = 403;
+        throw err;
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // XML / DOCX processing helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-const escapeXml = (value) =>
-    String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
 
 const buildPlaceholderData = (data) => {
     const value = (key) => data[key] ?? '';
@@ -79,7 +115,7 @@ const replaceBracketPlaceholders = (xmlContent, data) => {
 
     for (const key of bracketKeys) {
         const pattern = new RegExp(`\\[${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'g');
-        result = result.replace(pattern, escapeXml(data[key]));
+        result = result.replace(pattern, escapeXmlText(data[key]));
     }
 
     return result;
@@ -137,12 +173,16 @@ const hasTemplateFile = (templateFile) =>
 
 const getTemplateBuffer = async (templateFile) => {
     if (templateFile?.key) {
-        return s3StorageService.getBuffer(templateFile.key);
+        const buffer = await s3StorageService.getBuffer(templateFile.key);
+        validateDocxBuffer(buffer);
+        return buffer;
     }
 
     const templatePath = resolveTemplatePath(templateFile?.path);
     if (!templatePath) return null;
-    return fs.readFileSync(templatePath);
+    const buffer = fs.readFileSync(templatePath);
+    validateDocxBuffer(buffer);
+    return buffer;
 };
 
 const formatLetterDate = (value) => {
@@ -190,7 +230,7 @@ const buildIncidentLetterData = async (incident) => {
 const renderDocxTemplate = (fileBuffer, studentData) => {
     const PizZip = require('pizzip');
     const Docxtemplater = require('docxtemplater');
-    const preparedZip = prepareDocxForDocxtemplater(new PizZip(fileBuffer), studentData);
+    const preparedZip = prepareDocxForDocxtemplater(validateDocxBuffer(fileBuffer), studentData);
     const doc = new Docxtemplater(preparedZip, {
         paragraphLoop: true,
         linebreaks: true,
@@ -216,16 +256,16 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             return { success: false, message: 'No category specified for incident' };
         }
 
-        const allTemplates = await LetterTemplate.find({ isActive: true }).lean();
-        const matchingTemplate = allTemplates.find((template) => {
-            const templateCategory = template.incidentCategory?.trim();
-            if (!templateCategory || templateCategory.toLowerCase() !== incidentCategory.toLowerCase())
-                return false;
-            if (language === 'ta') return hasTemplateFile(template.tamilTemplateFile);
-            return hasTemplateFile(template.englishTemplateFile);
-        });
+        const matchingTemplate = await LetterTemplate.findOne({
+            isActive: true,
+            incidentCategory: { $regex: new RegExp(`^${escapeRegex(incidentCategory)}$`, 'i') },
+        }).lean();
 
-        if (!matchingTemplate) {
+        const templateAvailable = language === 'ta'
+            ? hasTemplateFile(matchingTemplate?.tamilTemplateFile)
+            : hasTemplateFile(matchingTemplate?.englishTemplateFile);
+
+        if (!matchingTemplate || !templateAvailable) {
             return {
                 success: false,
                 message: `No matching template found for category "${incidentCategory}"`,
@@ -258,12 +298,6 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             };
         }
 
-        const englishTemplate = allTemplates.find(
-            (t) =>
-                t.incidentCategory?.trim().toLowerCase() === incidentCategory.toLowerCase() &&
-                hasTemplateFile(t.englishTemplateFile)
-        );
-
         const letterNumber = await IssuedLetter.generateLetterNumber();
         const generatedFilename = `${letterNumber}.docx`;
         const generatedUpload = await s3StorageService.uploadBuffer({
@@ -281,7 +315,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             section: studentData.section,
             incidentCategory: incident.category,
             templateId: matchingTemplate._id,
-            title: englishTemplate ? englishTemplate.title : matchingTemplate.title,
+            title: matchingTemplate.title,
             generatedDocx: null,
             generatedDocxKey: generatedUpload.key,
             generatedDocxUrl: generatedUpload.url,
@@ -469,8 +503,9 @@ const getIssuedLetterById = async (id) => {
     return letter;
 };
 
-const getLettersByIncident = async (incidentId) =>
-    IssuedLetter.find({ incident: incidentId })
+const getLettersByIncident = async (incidentId, user) => {
+    await assertIncidentLetterAccess(incidentId, user);
+    return IssuedLetter.find({ incident: incidentId })
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -478,8 +513,15 @@ const getLettersByIncident = async (incidentId) =>
         )
         .sort({ generatedAt: -1 })
         .lean();
+};
 
-const getLettersByStudent = async (admissionNo, query) => {
+const getLettersByStudent = async (admissionNo, query, user) => {
+    if (!ADMIN_ROLES.has(user?.role) && !(user?.role === 'Student' && String(user.admissionNo || '') === String(admissionNo || ''))) {
+        const err = new Error('You are not allowed to access letters for this student.');
+        err.statusCode = 403;
+        throw err;
+    }
+
     const letterQuery = { admissionNo };
     const incidentDateQuery = buildIncidentTimelineDateQuery(
         query.fromDate || query.startDate,
@@ -499,9 +541,22 @@ const getLettersByStudent = async (admissionNo, query) => {
         .lean();
 };
 
-const getLetterStatusByIncidentIds = async (incidentIds) => {
+const getLetterStatusByIncidentIds = async (incidentIds, user) => {
     if (!Array.isArray(incidentIds) || incidentIds.length === 0) return {};
-    const letters = await IssuedLetter.find({ incident: { $in: incidentIds } }).select(
+
+    let allowedIncidentIds = incidentIds;
+    if (!ADMIN_ROLES.has(user?.role)) {
+        const incidents = await Incident.find({ _id: { $in: incidentIds } })
+            .select('reportedBy assignedHandler admissionNo')
+            .lean();
+        allowedIncidentIds = incidents
+            .filter((incident) => canAccessIncident(incident, user))
+            .map((incident) => incident._id);
+    }
+
+    if (allowedIncidentIds.length === 0) return {};
+
+    const letters = await IssuedLetter.find({ incident: { $in: allowedIncidentIds } }).select(
         'incident letterNumber generatedAt'
     ).lean();
     const statusMap = {};

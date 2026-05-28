@@ -15,14 +15,17 @@ const User = require('../models/User');
 const Category = require('../models/Category');
 const Location = require('../models/Location');
 const EvidenceType = require('../models/EvidenceType');
+const Log = require('../models/Log');
 
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
+const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
 const { autoGenerateLetterFromIncident } = require('./issuedLetterService');
 const notificationService = require('./notificationService');
 const { letterQueue, bulkQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
+const { buildCaseReportDocx } = require('./reports/caseReportService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -483,31 +486,26 @@ const createIncidents = async ({ body, files, user }) => {
         });
     }
 
-    try {
-        if (incidentsToInsert.length > 0) {
-            const inserted = await Incident.insertMany(incidentsToInsert);
-            createdIncidents.push(...inserted);
+    if (incidentsToInsert.length > 0) {
+        const inserted = await Incident.insertMany(incidentsToInsert);
+        createdIncidents.push(...inserted);
 
-            const Log = require('../models/Log');
-            await Log.create([{
-                actionName: useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
-                performedBy: user.id || null,
-                entityType: 'Incident',
-                entityId: createdIncidents[0]._id,
-                metadata: {
-                    title: createdIncidents[0]?.title,
-                    studentName: createdIncidents[0]?.studentsInvolved?.[0] || null,
-                    class: createdIncidents[0]?.class || null,
-                    section: createdIncidents[0]?.section || null,
-                    category: body.category,
-                    count: createdIncidents.length,
-                    reportedBy: user.name,
-                    isBulkSubmission,
-                }
-            }]);
-        }
-    } catch (err) {
-        throw err;
+        await Log.create([{
+            actionName: useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
+            performedBy: user.id || null,
+            entityType: 'Incident',
+            entityId: createdIncidents[0]._id,
+            metadata: {
+                title: createdIncidents[0]?.title,
+                studentName: createdIncidents[0]?.studentsInvolved?.[0] || null,
+                class: createdIncidents[0]?.class || null,
+                section: createdIncidents[0]?.section || null,
+                category: body.category,
+                count: createdIncidents.length,
+                reportedBy: user.name,
+                isBulkSubmission,
+            }
+        }]);
     }
 
     if (shouldGenerate) {
@@ -891,7 +889,7 @@ const processExcelUpload = async (filePath, user, body) => {
     try {
         workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false, cellNF: false });
         const sheetName = workbook.SheetNames[0];
-        data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        data = safeSheetToJson(XLSX, workbook.Sheets[sheetName]);
     } catch (readErr) {
         const msg = readErr.message || '';
         if (msg.includes('image.png') || msg.includes('does not support image') || msg.includes('model does not support')) {
@@ -1260,161 +1258,6 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Export Incident Case Report (DOCX)
 // ─────────────────────────────────────────────────────────────────────────────
-
-const PizZip = require('pizzip');
-const Docxtemplater = require('docxtemplater');
-
-const formatDate = (date) => {
-    if (!date) return 'N/A';
-    return new Date(date).toLocaleString('en-US', {
-        year: 'numeric', month: 'long', day: 'numeric',
-        hour: '2-digit', minute: '2-digit',
-    });
-};
-
-const buildReportFilename = ({ studentClass, studentSection, studentName, admissionNo, category }) => {
-    const clean = (str) => {
-        if (!str || str === 'N/A') return 'NA';
-        return str.toString().replace(/[^a-zA-Z0-9]/g, '_').substring(0, 25);
-    };
-    return `${clean(studentClass)}_${clean(studentSection)}_${clean(studentName)}_${clean(admissionNo)}_${(category || 'Incident').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20)}.docx`;
-};
-
-const buildCaseReportDocx = async (incidentId) => {
-    if (!mongoose.Types.ObjectId.isValid(incidentId)) {
-        const err = new Error('Invalid incident ID');
-        err.statusCode = 400;
-        throw err;
-    }
-
-    const incident = await Incident.findById(incidentId)
-        .populate('reportedBy', 'name role')
-        .populate('assignedHandler', 'name role')
-        .populate('closedBy', 'name role')
-        .lean();
-
-    if (!incident) {
-        const err = new Error('Incident not found');
-        err.statusCode = 404;
-        throw err;
-    }
-
-    let studentName = 'N/A';
-    let studentClass = incident.class || '';
-    let studentSection = incident.section || '';
-
-    if (incident.admissionNo) {
-        const student = await Student.findOne({ admissionNo: incident.admissionNo }).lean();
-        if (student) {
-            studentName = student.name || 'N/A';
-            studentClass = student.className || studentClass;
-            studentSection = student.section || studentSection;
-        }
-    }
-
-    const progressLogs = (incident.progressLogs || []).map((log) => ({
-        date: formatDate(log.timestamp),
-        updatedBy: log.updatedBy || 'Unknown',
-        note: log.note || 'N/A',
-    }));
-
-    const docData = {
-        incidentTitle: incident.title || 'Untitled Incident',
-        studentName,
-        admissionNo: incident.admissionNo || 'N/A',
-        class: studentClass || 'N/A',
-        section: studentSection || 'N/A',
-        incidentType: incident.category || 'N/A',
-        location: incident.location || 'Not provided',
-        assignedTo: incident.assignedHandler?.name || 'Unassigned',
-        openedAt: formatDate(incident.openedAt || incident.submittedAt || incident.createdAt),
-        inProgressAt: formatDate(incident.inProgressAt || incident.progressAt),
-        closedAt: formatDate(incident.closedAt),
-        reporterName: incident.reportedBy?.name || 'N/A',
-        handlerName: incident.assignedHandler?.name || 'Unassigned',
-        status: incident.status || 'Open',
-        description: incident.description || 'Not provided',
-        severity: incident.severity || 'N/A',
-        progressLogs,
-        closureNote: incident.closureNote || 'Not provided',
-        finalDecision: incident.status === 'Closed'
-            ? (incident.closureNote || 'Case closed without specific notes')
-            : 'Case is still open',
-        closureDate: incident.closedAt ? formatDate(incident.closedAt) : 'N/A',
-        isClosed: incident.status === 'Closed',
-        isInProgress: incident.status === 'In Progress',
-    };
-
-    const docTemplate = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    <w:p><w:r><w:rPr><w:b w:val="true"/><w:sz w:val="44"/></w:rPr><w:t>INCIDENT CASE REPORT</w:t></w:r></w:p>
-    <w:p><w:r><w:t></w:t></w:r></w:p>
-    <w:p><w:r><w:rPr><w:b w:val="true"/></w:rPr><w:t>STUDENT INFORMATION</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Full Name: {incidentTitle}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Student: {studentName}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Admission Number: {admissionNo}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Class: {class} | Section: {section}</w:t></w:r></w:p>
-    <w:p><w:r><w:t></w:t></w:r></w:p>
-    <w:p><w:r><w:rPr><w:b w:val="true"/></w:rPr><w:t>INCIDENT DETAILS</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Type: {incidentType} | Location: {location} | Severity: {severity}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Status: {status}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Assigned Handler: {assignedTo}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Description: {description}</w:t></w:r></w:p>
-    <w:p><w:r><w:t></w:t></w:r></w:p>
-    <w:p><w:r><w:rPr><w:b w:val="true"/></w:rPr><w:t>TIMELINE</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Reported By: {reporterName} | Handler: {handlerName}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Opened: {openedAt}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>In Progress: {inProgressAt}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Closed: {closedAt}</w:t></w:r></w:p>
-    <w:p><w:r><w:t></w:t></w:r></w:p>
-    <w:p><w:r><w:rPr><w:b w:val="true"/></w:rPr><w:t>PROGRESS HISTORY</w:t></w:r></w:p>
-    {#progressLogs}
-    <w:p><w:r><w:t>--- {date} | {updatedBy}: {note}</w:t></w:r></w:p>
-    {/progressLogs}
-    {#isClosed}
-    <w:p><w:r><w:t></w:t></w:r></w:p>
-    <w:p><w:r><w:rPr><w:b w:val="true"/></w:rPr><w:t>CLOSURE</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Closed: {closureDate} | Note: {closureNote}</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Final Decision: {finalDecision}</w:t></w:r></w:p>
-    {/isClosed}
-  </w:body>
-</w:document>`;
-
-    const zip = new PizZip();
-    zip.file('word/document.xml', docTemplate);
-    zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>`);
-    zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`);
-
-    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-    doc.render(docData);
-    const buffer = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
-
-    const filename = buildReportFilename({
-        studentClass,
-        studentSection,
-        studentName,
-        admissionNo: incident.admissionNo,
-        category: incident.category,
-    });
-
-    const upload = await s3StorageService.uploadBuffer({
-        buffer,
-        key: `exports/reports/${incident._id}/${filename}`,
-        filename,
-        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-
-    return { buffer, filename, url: upload.url, key: upload.key };
-};
 
 module.exports = {
     createIncidents,

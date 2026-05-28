@@ -33,7 +33,7 @@ const incidentSchema = new mongoose.Schema(
         rejectionReason: { type: String, default: null },
         studentsInvolved: [{ type: String }],
         admissionNo: { type: String, index: true },
-        class: { type: String },
+        class: { type: String, alias: 'className' },
         section: { type: String },
         student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', index: true },
         reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -56,7 +56,11 @@ const incidentSchema = new mongoose.Schema(
         actionTaken: { type: String },
         closureNote: { type: String },
     },
-    { timestamps: true }
+    {
+        timestamps: true,
+        toJSON: { virtuals: true },
+        toObject: { virtuals: true },
+    }
 );
 
 // Compound indexes for the most common query patterns

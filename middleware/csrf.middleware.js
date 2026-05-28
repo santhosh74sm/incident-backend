@@ -1,7 +1,9 @@
 const crypto = require('crypto');
+const logger = require('../utils/pinoLogger');
 
 const CSRF_COOKIE_NAME = 'csrfToken';
 const CSRF_HEADER_NAME = 'x-csrf-token';
+const CSRF_RESPONSE_HEADER_NAME = 'X-CSRF-Token';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const configuredOrigins = (process.env.CORS_ORIGIN || '')
@@ -25,6 +27,7 @@ const createCsrfToken = () => crypto.randomBytes(32).toString('base64url');
 
 const setCsrfCookie = (res, token = createCsrfToken()) => {
     res.cookie(CSRF_COOKIE_NAME, token, csrfCookieOptions);
+    res.setHeader(CSRF_RESPONSE_HEADER_NAME, token);
     return token;
 };
 
@@ -55,9 +58,7 @@ const isExemptPath = (req) => {
 
 const csrfProtection = (req, res, next) => {
     if (SAFE_METHODS.has(req.method)) {
-        if (!req.cookies?.[CSRF_COOKIE_NAME]) {
-            setCsrfCookie(res);
-        }
+        setCsrfCookie(res, req.cookies?.[CSRF_COOKIE_NAME] || undefined);
         next();
         return;
     }
@@ -71,6 +72,13 @@ const csrfProtection = (req, res, next) => {
     const headerToken = req.get(CSRF_HEADER_NAME);
 
     if (!constantTimeEqual(cookieToken, headerToken)) {
+        logger.warn('CSRF validation failed', {
+            path: req.path,
+            method: req.method,
+            ip: req.ip,
+            hasCookieToken: Boolean(cookieToken),
+            hasHeaderToken: Boolean(headerToken),
+        });
         return res.status(403).json({
             code: 'CSRF_TOKEN_INVALID',
             message: 'Security check failed. Please refresh and try again.',
@@ -82,6 +90,7 @@ const csrfProtection = (req, res, next) => {
 
 module.exports = {
     CSRF_COOKIE_NAME,
+    CSRF_RESPONSE_HEADER_NAME,
     clearCsrfCookie,
     csrfProtection,
     setCsrfCookie,

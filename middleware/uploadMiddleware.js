@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const s3StorageService = require('../services/s3StorageService');
+const { validateDocxBuffer } = require('../utils/docxSecurity');
 
 const uploadDir = path.join(__dirname, '..', 'uploads');
 
@@ -180,6 +181,10 @@ const validateFileTypes = async (req, res, next) => {
             const allowedDetectedTypes = signaturesByExtension[extension] || [];
 
             if (zipOfficeExtensions.has(extension) && buffer[0] === 0x50 && buffer[1] === 0x4b) {
+                if (extension === 'docx') {
+                    const fullBuffer = file.buffer || await fs.promises.readFile(file.path);
+                    validateDocxBuffer(fullBuffer);
+                }
                 continue;
             }
 

@@ -60,11 +60,14 @@ router.get(/^\/s3\/(.+)/, protect, async (req, res, next) => {
             return res.status(400).json({ message: 'Invalid file key' });
         }
 
-        const buffer = await s3StorageService.getBuffer(key);
-        res.setHeader('Content-Type', 'application/octet-stream');
+        const object = await s3StorageService.getObjectStream(key);
+        res.setHeader('Content-Type', object.contentType || 'application/octet-stream');
         res.setHeader('Content-Disposition', `attachment; filename="${path.basename(key)}"`);
         res.setHeader('Cache-Control', 'private, no-store');
-        return res.send(buffer);
+        if (object.contentLength) {
+            res.setHeader('Content-Length', object.contentLength);
+        }
+        return object.body.pipe(res);
     } catch (error) {
         next(error);
     }

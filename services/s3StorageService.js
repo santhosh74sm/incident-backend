@@ -64,6 +64,19 @@ const getBuffer = async (key) => {
     return streamToBuffer(result.Body);
 };
 
+const getObjectStream = async (key) => {
+    const result = await s3.send(new GetObjectCommand({
+        Bucket: getBucketName(),
+        Key: key,
+    }));
+
+    return {
+        body: result.Body,
+        contentLength: result.ContentLength,
+        contentType: result.ContentType,
+    };
+};
+
 const deleteObject = async (key) => {
     if (!key) return;
 
@@ -79,5 +92,6 @@ module.exports = {
     buildS3Url,
     deleteObject,
     getBuffer,
+    getObjectStream,
     uploadBuffer,
 };

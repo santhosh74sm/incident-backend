@@ -8,6 +8,7 @@ const {
     getAllUsers,
     deleteUser,
     getMe,
+    getCsrf,
     logoutUser,
     changeStudentPassword,
     refreshSession,
@@ -26,9 +27,11 @@ const { authSensitiveRateLimiter } = require('../middleware/rateLimit.middleware
 
 router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
+router.get('/csrf', getCsrf);
+router.get('/csrf-token', getCsrf);
 router.post('/register', validate(registerSchema), registerUser);
 router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser);
-router.post('/refresh', authSensitiveRateLimiter, refreshSession);
+router.post('/refresh', refreshSession);
 router.post('/logout', logoutUser);
 router.get('/me', protect, getMe);
 // Student-specific auth routes

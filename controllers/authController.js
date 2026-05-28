@@ -77,6 +77,10 @@ const getMe = async (req, res) => {
     res.json(authService.getCurrentUserResponse(req.user));
 };
 
+const getCsrf = async (req, res) => {
+    res.json({ csrfToken: res.getHeader('X-CSRF-Token') || null });
+};
+
 const refreshSession = async (req, res, next) => {
     try {
         const session = await sessionService.rotateRefreshSession({
@@ -187,6 +191,7 @@ module.exports = {
     getAllUsers,
     deleteUser,
     getMe,
+    getCsrf,
     logoutUser,
     resetUserPassword,
     changeStaffPassword,

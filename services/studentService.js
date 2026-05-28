@@ -8,6 +8,7 @@ const pick = require('../utils/pick');
 const AppError = require('../utils/AppError');
 const { generateStudentInitialPassword } = require('./studentAuthService');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
+const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section'];
 
@@ -117,7 +118,7 @@ const uploadStudents = async ({ filePath, actor }) => {
 
     try {
         const workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false, cellNF: false });
-        const data = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        const data = safeSheetToJson(XLSX, workbook.Sheets[workbook.SheetNames[0]]);
 
         if (!data || data.length === 0) {
             throw new AppError('Excel file is empty or has no valid rows.', 400);

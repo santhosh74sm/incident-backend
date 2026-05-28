@@ -252,7 +252,7 @@ const downloadTemplate = async (req, res, next) => {
 
 const exportIncidentReport = async (req, res, next) => {
     try {
-        const { buffer, filename, url } = await incidentService.buildCaseReportDocx(req.params.id);
+        const { buffer, filename, url } = await incidentService.buildCaseReportDocx(req.params.id, req.user);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

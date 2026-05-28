@@ -73,8 +73,8 @@ const corsOptions = {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control'],
-    exposedHeaders: ['Content-Disposition', 'X-S3-File-Url'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control', 'X-CSRF-Token'],
+    exposedHeaders: ['Content-Disposition', 'X-S3-File-Url', 'X-CSRF-Token'],
     optionsSuccessStatus: 204,
     maxAge: 86400
 };
@@ -94,6 +94,15 @@ app.use('/api', globalApiRateLimiter);
 app.use(express.json({ limit: env.JSON_BODY_LIMIT || '1mb' }));
 app.use(express.urlencoded({ limit: env.URLENCODED_BODY_LIMIT || '1mb', extended: true }));
 app.use(csrfProtection);
+
+app.get(['/api/auth/csrf', '/api/auth/csrf-token'], (req, res) => {
+    logger.info('CSRF bootstrap route hit', {
+        path: req.path,
+        origin: req.get('origin') || null,
+        hasCsrfCookie: Boolean(req.cookies?.csrfToken),
+    });
+    res.json({ csrfToken: res.getHeader('X-CSRF-Token') || null });
+});
 
 app.use('/api/uploads', require('./routes/fileRoutes'));
 
@@ -141,6 +150,11 @@ const startServer = async () => {
         await connectDB();
         server = app.listen(PORT, () => {
             logger.info(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'} mode)`);
+            logger.info('Registered security bootstrap routes', {
+                csrfRoutes: ['/api/auth/csrf', '/api/auth/csrf-token'],
+                authMount: '/api/auth',
+                allowedOrigins,
+            });
         });
 
         server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS) || 120000;

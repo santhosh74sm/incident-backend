@@ -50,7 +50,7 @@ const getIssuedLetterById = async (req, res, next) => {
 
 const getLetterByIncident = async (req, res, next) => {
     try {
-        const letters = await issuedLetterService.getLettersByIncident(req.params.incidentId);
+        const letters = await issuedLetterService.getLettersByIncident(req.params.incidentId, req.user);
         res.json(letters);
     } catch (error) {
         next(error);
@@ -63,7 +63,7 @@ const getLetterByIncident = async (req, res, next) => {
 
 const getLettersByStudent = async (req, res, next) => {
     try {
-        const letters = await issuedLetterService.getLettersByStudent(req.params.admissionNo, req.query);
+        const letters = await issuedLetterService.getLettersByStudent(req.params.admissionNo, req.query, req.user);
         res.json(letters);
     } catch (error) {
         next(error);
@@ -76,7 +76,7 @@ const getLettersByStudent = async (req, res, next) => {
 
 const getLetterStatusByIncidentIds = async (req, res, next) => {
     try {
-        const statusMap = await issuedLetterService.getLetterStatusByIncidentIds(req.body.incidentIds);
+        const statusMap = await issuedLetterService.getLetterStatusByIncidentIds(req.body.incidentIds, req.user);
         res.json(statusMap);
     } catch (error) {
         next(error);
