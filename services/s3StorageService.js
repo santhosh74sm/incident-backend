@@ -39,14 +39,21 @@ const buildRandomKey = (folder, filename) => {
     return `${cleanFolder}/${randomName}${extension}`;
 };
 
+const sanitizeDispositionFilename = (filename) => {
+    const base = path.basename(String(filename || 'file')).replace(/["\r\n\\]/g, '_');
+    return base || 'file';
+};
+
 const uploadBuffer = async ({ buffer, key, folder = 'uploads', filename, contentType }) => {
     const s3Key = key || buildRandomKey(folder, filename);
+    const safeFilename = sanitizeDispositionFilename(filename || path.basename(s3Key));
 
     await s3.send(new PutObjectCommand({
         Bucket: getBucketName(),
         Key: s3Key,
         Body: buffer,
         ContentType: contentType || 'application/octet-stream',
+        ContentDisposition: `inline; filename="${safeFilename}"`,
     }));
 
     return {
@@ -74,6 +81,7 @@ const getObjectStream = async (key) => {
         body: result.Body,
         contentLength: result.ContentLength,
         contentType: result.ContentType,
+        contentDisposition: result.ContentDisposition,
     };
 };
 
