@@ -21,6 +21,8 @@ const buildS3Url = (key) => {
         : `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
 };
 
+const buildProtectedUrl = (key) => `/api/uploads/s3/${key.split('/').map(encodeURIComponent).join('/')}`;
+
 const streamToBuffer = async (stream) => {
     const chunks = [];
     for await (const chunk of stream) {
@@ -49,7 +51,7 @@ const uploadBuffer = async ({ buffer, key, folder = 'uploads', filename, content
 
     return {
         key: s3Key,
-        url: buildS3Url(s3Key),
+        url: buildProtectedUrl(s3Key),
     };
 };
 
@@ -73,6 +75,7 @@ const deleteObject = async (key) => {
 
 module.exports = {
     buildRandomKey,
+    buildProtectedUrl,
     buildS3Url,
     deleteObject,
     getBuffer,

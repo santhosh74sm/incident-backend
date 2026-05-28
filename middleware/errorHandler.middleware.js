@@ -46,6 +46,10 @@ const errorHandler = (err, req, res, next) => {
         message: statusCode >= 500 && isProduction ? 'Internal server error' : message,
     };
 
+    if (typeof err.code === 'string' && statusCode < 500) {
+        payload.code = err.code;
+    }
+
     if (statusCode === 400 && validationErrors) {
         payload.errors = validationErrors;
     }

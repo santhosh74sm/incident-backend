@@ -35,12 +35,18 @@ const envSchema = z.object({
     RATE_LIMIT_MAX: z.string().optional(),
     AUTH_RATE_LIMIT_WINDOW_MS: z.string().optional(),
     AUTH_RATE_LIMIT_MAX: z.string().optional(),
-    JSON_BODY_LIMIT: z.string().default('10mb'),
-    URLENCODED_BODY_LIMIT: z.string().default('10mb'),
+    JSON_BODY_LIMIT: z.string().default('1mb'),
+    URLENCODED_BODY_LIMIT: z.string().default('1mb'),
     UPLOAD_MAX_FILE_SIZE_BYTES: z.string().optional(),
     UPLOAD_MAX_FILES: z.string().optional(),
     KEEP_ALIVE_TIMEOUT_MS: z.string().optional(),
     HEADERS_TIMEOUT_MS: z.string().optional(),
+    AWS_REGION: z.string().optional(),
+    AWS_BUCKET_NAME: z.string().optional(),
+    AWS_ACCESS_KEY: z.string().optional(),
+    AWS_SECRET_KEY: z.string().optional(),
+    COOKIE_SECURE: z.enum(['true', 'false']).optional(),
+    REFRESH_REUSE_GRACE_MS: z.string().optional(),
 }).superRefine((env, ctx) => {
     if (!env.JWT_SECRET_STAFF) {
         ctx.addIssue({
@@ -86,6 +92,16 @@ const envSchema = z.object({
                 message: 'CORS_ORIGIN is required in production',
             });
         }
+
+        ['AWS_REGION', 'AWS_BUCKET_NAME', 'AWS_ACCESS_KEY', 'AWS_SECRET_KEY'].forEach((key) => {
+            if (!env[key]) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: [key],
+                    message: `${key} is required in production`,
+                });
+            }
+        });
     }
 });
 

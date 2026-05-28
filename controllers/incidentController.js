@@ -93,7 +93,7 @@ const getIncidentLocationDistribution = async (req, res, next) => {
 
 const getIncidentById = async (req, res, next) => {
     try {
-        const incident = await incidentService.getIncidentById(req.params.id);
+        const incident = await incidentService.getIncidentById(req.params.id, req.user);
         res.json(incident);
     } catch (error) {
         next(error);

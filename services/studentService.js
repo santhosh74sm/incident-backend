@@ -116,7 +116,7 @@ const uploadStudents = async ({ filePath, actor }) => {
     }
 
     try {
-        const workbook = XLSX.readFile(filePath);
+        const workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false, cellNF: false });
         const data = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
         if (!data || data.length === 0) {

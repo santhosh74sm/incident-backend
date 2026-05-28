@@ -13,6 +13,7 @@ const path = require('path');
 const { protect } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
 const { filenameParamSchema } = require('../validators/fileValidators');
+const s3StorageService = require('../services/s3StorageService');
 
 const router = express.Router();
 const uploadRoot = path.resolve(__dirname, '..', 'uploads');
@@ -49,6 +50,24 @@ router.get('/:filename', protect, validate(filenameParamSchema, 'params'), (req,
     }
 
     return res.sendFile(resolvedPath);
+});
+
+router.get(/^\/s3\/(.+)/, protect, async (req, res, next) => {
+    try {
+        const key = decodeURIComponent(req.params[0] || '').replace(/^\/+/, '');
+
+        if (!key || key.includes('..') || key.includes('\\')) {
+            return res.status(400).json({ message: 'Invalid file key' });
+        }
+
+        const buffer = await s3StorageService.getBuffer(key);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(key)}"`);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
 });
 
 module.exports = router;

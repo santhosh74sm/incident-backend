@@ -62,6 +62,7 @@ router.put(
     validate(objectIdParamSchema, 'params'),
     uploadTemplateFile,
     upload.validateFileTypes,
+    upload.uploadValidatedFilesToS3,
     validate(templateUploadSchema),
     uploadTemplateFileController
 );

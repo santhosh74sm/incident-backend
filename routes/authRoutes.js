@@ -28,7 +28,7 @@ router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
 router.post('/register', validate(registerSchema), registerUser);
 router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser);
-router.post('/refresh', refreshSession);
+router.post('/refresh', authSensitiveRateLimiter, refreshSession);
 router.post('/logout', logoutUser);
 router.get('/me', protect, getMe);
 // Student-specific auth routes

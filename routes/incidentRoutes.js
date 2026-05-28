@@ -97,6 +97,7 @@ router
         protect,
         upload.array('evidence', 10),
         upload.validateFileTypes,
+        upload.uploadValidatedFilesToS3,
         validate(createIncidentSchema),
         createIncident
     );
@@ -122,6 +123,7 @@ router.put(
     validate(objectIdParamSchema, 'params'),
     upload.array('evidence', 10),
     upload.validateFileTypes,
+    upload.uploadValidatedFilesToS3,
     validate(addEvidenceSchema),
     addIncidentEvidence
 );

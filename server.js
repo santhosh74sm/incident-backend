@@ -5,6 +5,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { globalApiRateLimiter } = require('./middleware/rateLimit.middleware');
 const cookieParser = require('cookie-parser');
+const { csrfProtection } = require('./middleware/csrf.middleware');
 const connectDB = require('./config/db.js');
 const ensureDbReady = require('./middleware/dbReadyMiddleware');
 const errorHandler = require('./middleware/errorHandler.middleware');
@@ -27,7 +28,21 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }
+    contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+            defaultSrc: ["'self'"],
+            baseUri: ["'self'"],
+            frameAncestors: ["'none'"],
+            objectSrc: ["'none'"],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc: ["'self'", ...((env.CORS_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean))],
+        },
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'no-referrer' },
 }));
 
 const defaultAllowedOrigins = [
@@ -38,8 +53,8 @@ const defaultAllowedOrigins = [
 ];
 
 const allowedOrigins = [
-    ...defaultAllowedOrigins,
-    ...(process.env.CORS_ORIGIN || '')
+    ...(env.NODE_ENV === 'production' ? [] : defaultAllowedOrigins),
+    ...(env.CORS_ORIGIN || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean)
@@ -76,8 +91,9 @@ app.use(compression({
 
 app.use('/api', globalApiRateLimiter);
 
-app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));
-app.use(express.urlencoded({ limit: process.env.URLENCODED_BODY_LIMIT || '10mb', extended: true }));
+app.use(express.json({ limit: env.JSON_BODY_LIMIT || '1mb' }));
+app.use(express.urlencoded({ limit: env.URLENCODED_BODY_LIMIT || '1mb', extended: true }));
+app.use(csrfProtection);
 
 app.use('/api/uploads', require('./routes/fileRoutes'));
 
@@ -100,7 +116,6 @@ app.get('/health', (req, res) => {
         status: 'healthy',
         database: require('mongoose').connection.readyState === 1 ? 'connected' : 'reconnecting',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
         queues: {
             letterGen:   { active: letterQueue.active(), pending: letterQueue.size() },
             bulkUpload:  { active: bulkQueue.active(),  pending: bulkQueue.size() },

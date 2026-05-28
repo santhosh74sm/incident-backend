@@ -17,6 +17,16 @@ const ADMIN_ROLES = ['Super Admin', 'Admin'];
 const TEACHER_ROLES = ['Teacher', 'teacher'];
 const STAFF_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
 
+const PASSWORD_POLICY_MESSAGE = 'Password must be at least 12 characters and include uppercase, lowercase, number, and symbol.';
+
+const isStrongPassword = (password) =>
+    typeof password === 'string' &&
+    password.length >= 12 &&
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /\d/.test(password) &&
+    /[^A-Za-z0-9]/.test(password);
+
 const toClientRole = (role) => {
     const normalizedRole = ROLE_MAP[String(role || '').trim().toLowerCase()];
     return normalizedRole || role;
@@ -72,6 +82,10 @@ const registerUser = async ({ input, actor }) => {
 
     if (!name || !email || !password || !role) {
         throw new AppError('Please provide all required fields', 400);
+    }
+
+    if (!isStrongPassword(password)) {
+        throw new AppError(PASSWORD_POLICY_MESSAGE, 400);
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -266,7 +280,8 @@ const deleteUser = async ({ id, actor }) => {
 
 const generateTemporaryPassword = () => {
     const prefixes = ['Temp', 'Staff'];
-    return `${prefixes[crypto.randomInt(0, prefixes.length)]}@${crypto.randomInt(1000, 10000)}`;
+    const random = crypto.randomBytes(5).toString('base64url');
+    return `${prefixes[crypto.randomInt(0, prefixes.length)]}@${random}${crypto.randomInt(1000, 10000)}aA`;
 };
 
 const resetUserPassword = async ({ id, actor }) => {
@@ -312,8 +327,8 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
         throw new AppError('Current password, new password, and confirmation are required', 400);
     }
 
-    if (newPassword.length < 6) {
-        throw new AppError('New password must be at least 6 characters long', 400);
+    if (!isStrongPassword(newPassword)) {
+        throw new AppError(PASSWORD_POLICY_MESSAGE, 400);
     }
 
     if (newPassword !== confirmPassword) {
@@ -364,8 +379,8 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
         throw new AppError('Current password, new password, and confirmation are required', 400);
     }
 
-    if (newPassword.length < 6) {
-        throw new AppError('New password must be at least 6 characters long', 400);
+    if (!isStrongPassword(newPassword)) {
+        throw new AppError(PASSWORD_POLICY_MESSAGE, 400);
     }
 
     if (newPassword !== confirmPassword) {

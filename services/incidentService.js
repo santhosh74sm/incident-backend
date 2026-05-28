@@ -33,6 +33,47 @@ const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
 const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
 const isAdministrationRole = (role) => ADMIN_ROLES.includes(role);
 
+const toIdString = (value) => {
+    if (!value) return '';
+    if (value._id) return String(value._id);
+    return String(value);
+};
+
+const canAccessIncident = (incident, user) => {
+    if (!incident || !user) return false;
+    if (isAdministrationRole(user.role)) return true;
+
+    const userId = toIdString(user.id || user._id);
+
+    if (user.role === 'Teacher') {
+        return [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId);
+    }
+
+    if (user.role === 'Student') {
+        return String(incident.admissionNo || '') === String(user.admissionNo || '');
+    }
+
+    return false;
+};
+
+const assertIncidentAccess = (incident, user, action = 'access') => {
+    if (canAccessIncident(incident, user)) return;
+
+    const err = new Error(`You are not allowed to ${action} this incident.`);
+    err.statusCode = 403;
+    throw err;
+};
+
+const assertIncidentMutationAccess = (incident, user, action) => {
+    if (user?.role === 'Student') {
+        const err = new Error('Students cannot modify incidents.');
+        err.statusCode = 403;
+        throw err;
+    }
+
+    assertIncidentAccess(incident, user, action);
+};
+
 const buildAlternationRegex = (values) => {
     const parts = Array.from(values).map(escapeRegex);
     if (parts.length === 0) return null;
@@ -562,7 +603,7 @@ const getLocationDistribution = async ({ user, query }) => {
     }, []);
 };
 
-const getIncidentById = async (id) => {
+const getIncidentById = async (id, user) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
         const err = new Error('Invalid incident ID');
         err.statusCode = 400;
@@ -581,6 +622,8 @@ const getIncidentById = async (id) => {
         err.statusCode = 404;
         throw err;
     }
+
+    assertIncidentAccess(incident, user, 'view');
 
     const incidentObj = incident;
 
@@ -667,6 +710,7 @@ const addProgressNote = async (incidentId, note, user) => {
         err.statusCode = 404;
         throw err;
     }
+    assertIncidentMutationAccess(incident, user, 'update');
 
     const movedToInProgress = incident.status === 'Open';
     if (movedToInProgress) {
@@ -716,6 +760,7 @@ const requestClosure = async (incidentId, actionTaken, user) => {
         err.statusCode = 404;
         throw err;
     }
+    assertIncidentMutationAccess(incident, user, 'request closure for');
 
     incident.closureRequested = true;
     incident.actionTaken = actionTaken;
@@ -816,6 +861,7 @@ const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {
         err.statusCode = 404;
         throw err;
     }
+    assertIncidentMutationAccess(incident, user, 'add evidence to');
 
     let evidenceDataList = [];
     try { evidenceDataList = JSON.parse(evidenceDataRaw || '[]'); } catch { evidenceDataList = []; }

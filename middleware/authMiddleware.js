@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Student = require('../models/Student');
 const env = require('../config/env');
-const { clearAuthCookie, clearSessionCookies } = require('../config/authCookies');
+const { clearSessionCookies } = require('../config/authCookies');
 
 const SECRETS = {
     staff: env.JWT_SECRET_STAFF,
@@ -107,7 +107,6 @@ const protect = async (req, res, next) => {
         next();
     } catch (error) {
         if (error.name === 'TokenExpiredError') {
-            clearAuthCookie(res);
             return res.status(401).json({
                 code: 'ACCESS_TOKEN_EXPIRED',
                 message: 'Session needs renewal.',

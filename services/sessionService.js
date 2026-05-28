@@ -6,6 +6,7 @@ const generateToken = require('../config/generateToken');
 const AppError = require('../utils/AppError');
 
 const refreshTokenTtlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS) || 30;
+const refreshReuseGraceMs = Number(process.env.REFRESH_REUSE_GRACE_MS) || 5000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
@@ -62,14 +63,29 @@ const rotateRefreshSession = async ({ rawRefreshToken, req }) => {
         throw new AppError('Refresh session not found', 401);
     }
 
-    if (session.revokedAt || session.expiresAt <= new Date()) {
+    if (session.revokedAt) {
+        const revokedRecently = Date.now() - new Date(session.revokedAt).getTime() <= refreshReuseGraceMs;
+        if (session.replacedBy && revokedRecently) {
+            throw new AppError('Refresh already rotated in another tab', 409, 'REFRESH_RETRY_GRACE');
+        }
+
         session.reuseDetectedAt = new Date();
         await session.save();
         await RefreshToken.updateMany(
             { familyId: session.familyId, revokedAt: null },
             { revokedAt: new Date(), reuseDetectedAt: new Date() }
         );
-        throw new AppError('Refresh session reused or expired', 401);
+        throw new AppError('Refresh session reused', 401);
+    }
+
+    if (session.expiresAt <= new Date()) {
+        session.reuseDetectedAt = new Date();
+        await session.save();
+        await RefreshToken.updateMany(
+            { familyId: session.familyId, revokedAt: null },
+            { revokedAt: new Date(), reuseDetectedAt: new Date() }
+        );
+        throw new AppError('Refresh session expired', 401);
     }
 
     const user = await findUser(session.user, session.type);

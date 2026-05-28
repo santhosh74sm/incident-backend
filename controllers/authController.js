@@ -8,6 +8,7 @@ const {
     clearRefreshCookie,
     clearSessionCookies,
 } = require('../config/authCookies');
+const { clearCsrfCookie, setCsrfCookie } = require('../middleware/csrf.middleware');
 
 const setAuthCookie = (res, user, type) => {
     setCookie(res, generateToken(user, type), type);
@@ -16,6 +17,7 @@ const setAuthCookie = (res, user, type) => {
 const setSessionCookies = (res, session) => {
     setCookie(res, session.accessToken);
     setRefreshCookie(res, session.refreshToken);
+    setCsrfCookie(res);
 };
 
 const getAdminExists = async (req, res, next) => {
@@ -84,7 +86,9 @@ const refreshSession = async (req, res, next) => {
         setSessionCookies(res, session);
         res.json(authService.getCurrentUserResponse(session.user));
     } catch (error) {
-        clearSessionCookies(res);
+        if (error.code !== 'REFRESH_RETRY_GRACE') {
+            clearSessionCookies(res);
+        }
         next(error);
     }
 };
@@ -92,6 +96,7 @@ const refreshSession = async (req, res, next) => {
 const logoutUser = async (req, res) => {
     await sessionService.revokeRefreshToken(req.cookies?.refreshToken);
     clearSessionCookies(res);
+    clearCsrfCookie(res);
     res.json({ message: 'Logged out' });
 };
 

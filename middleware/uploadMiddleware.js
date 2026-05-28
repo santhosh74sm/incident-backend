@@ -1,9 +1,8 @@
 const multer = require('multer');
-const multerS3 = require('multer-s3');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const s3 = require('../config/s3');
+const s3StorageService = require('../services/s3StorageService');
 
 const uploadDir = path.join(__dirname, '..', 'uploads');
 
@@ -19,26 +18,6 @@ const localStorage = multer.diskStorage({
         const extension = path.extname(file.originalname).toLowerCase();
         const randomName = crypto.randomBytes(16).toString('hex');
         cb(null, `${randomName}${extension}`);
-    }
-});
-
-const s3Storage = multerS3({
-    s3,
-    bucket: (req, file, cb) => {
-        if (!process.env.AWS_BUCKET_NAME) {
-            cb(new Error('AWS_BUCKET_NAME is required for S3 uploads'));
-            return;
-        }
-
-        cb(null, process.env.AWS_BUCKET_NAME);
-    },
-    contentType: multerS3.AUTO_CONTENT_TYPE,
-    key: (req, file, cb) => {
-        const extension = path.extname(file.originalname).toLowerCase();
-        const randomName = crypto.randomBytes(16).toString('hex');
-        const filename = `${randomName}${extension}`;
-        file.filename = filename;
-        cb(null, filename);
     }
 });
 
@@ -116,7 +95,7 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({
-    storage: s3Storage,
+    storage: multer.memoryStorage(),
     fileFilter,
     limits: {
         fileSize: Number(process.env.UPLOAD_MAX_FILE_SIZE_BYTES) || 10 * 1024 * 1024,
@@ -171,15 +150,19 @@ const validateFileTypes = async (req, res, next) => {
         const { fileTypeFromBuffer } = await import('file-type');
 
         for (const file of files) {
-            if (!file.path) {
-                continue;
-            }
-
             const extension = path.extname(file.originalname).toLowerCase().replace('.', '');
-            const fd = await fs.promises.open(file.path, 'r');
-            const buffer = Buffer.alloc(4100);
-            await fd.read(buffer, 0, 4100, 0);
-            await fd.close();
+            let buffer;
+
+            if (file.buffer) {
+                buffer = file.buffer.subarray(0, 4100);
+            } else if (file.path) {
+                const fd = await fs.promises.open(file.path, 'r');
+                buffer = Buffer.alloc(4100);
+                await fd.read(buffer, 0, 4100, 0);
+                await fd.close();
+            } else {
+                return res.status(400).json({ message: `File type could not be verified: ${file.originalname}` });
+            }
 
             if (textExtensions.has(extension)) {
                 if (buffer.includes(0)) {
@@ -213,6 +196,34 @@ const validateFileTypes = async (req, res, next) => {
     }
 };
 
+const uploadValidatedFilesToS3 = async (req, res, next) => {
+    const files = getUploadedFiles(req);
+    if (files.length === 0) return next();
+
+    try {
+        await Promise.all(files.map(async (file) => {
+            if (!file.buffer || file.location) return;
+
+            const result = await s3StorageService.uploadBuffer({
+                buffer: file.buffer,
+                folder: 'uploads',
+                filename: file.originalname,
+                contentType: file.mimetype,
+            });
+
+            file.key = result.key;
+            file.location = result.url;
+            file.filename = path.basename(result.key);
+            delete file.buffer;
+        }));
+
+        next();
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = upload;
 module.exports.local = localUpload;
 module.exports.validateFileTypes = validateFileTypes;
+module.exports.uploadValidatedFilesToS3 = uploadValidatedFilesToS3;
