@@ -1,10 +1,12 @@
 const { z } = require('zod');
 
+const PASSWORD_MIN_LENGTH = 8;
+
 const registerSchema = z.object({
     name: z.string().trim().min(1).max(120),
     email: z.string().trim().email().max(254),
     password: z.string()
-        .min(12, 'Password must be at least 12 characters')
+        .min(PASSWORD_MIN_LENGTH, 'Password must be at least 8 characters')
         .max(200)
         .regex(/[a-z]/, 'Password must include a lowercase letter')
         .regex(/[A-Z]/, 'Password must include an uppercase letter')
@@ -24,7 +26,7 @@ const changeStudentPasswordSchema = z
     .object({
         currentPassword: z.string().min(1, 'Current password is required').max(200),
         newPassword: z.string()
-            .min(12, 'New password must be at least 12 characters')
+            .min(PASSWORD_MIN_LENGTH, 'New password must be at least 8 characters')
             .max(200)
             .regex(/[a-z]/, 'New password must include a lowercase letter')
             .regex(/[A-Z]/, 'New password must include an uppercase letter')

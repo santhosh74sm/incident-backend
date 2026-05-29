@@ -16,12 +16,13 @@ const ROLE_MAP = {
 const ADMIN_ROLES = ['Super Admin', 'Admin'];
 const TEACHER_ROLES = ['Teacher', 'teacher'];
 const STAFF_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
+const PASSWORD_MIN_LENGTH = 8;
 
-const PASSWORD_POLICY_MESSAGE = 'Password must be at least 12 characters and include uppercase, lowercase, number, and symbol.';
+const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include uppercase, lowercase, number, and symbol.';
 
 const isStrongPassword = (password) =>
     typeof password === 'string' &&
-    password.length >= 12 &&
+    password.length >= PASSWORD_MIN_LENGTH &&
     /[a-z]/.test(password) &&
     /[A-Z]/.test(password) &&
     /\d/.test(password) &&
