@@ -25,7 +25,6 @@ const envSchema = z.object({
     JWT_SECRET_STAFF: z.string().min(32).optional(),
     JWT_SECRET_STUDENT: z.string().min(32).optional(),
     JWT_SECRET: z.string().min(32).optional(),
-    JWT_EXPIRES_IN: z.string().default('24h'),
     JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
     ACCESS_COOKIE_MAX_AGE_MS: z.string().optional(),
     REFRESH_COOKIE_MAX_AGE_MS: z.string().optional(),

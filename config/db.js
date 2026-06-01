@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const env = require('./env');
 const logger = require('../utils/pinoLogger');
-const e = require('cors');
 
 mongoose.set('bufferCommands', false);
 
