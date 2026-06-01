@@ -10,6 +10,7 @@ const logSchema = new mongoose.Schema({
 
 // Ensure high speed queries
 logSchema.index({ createdAt: -1 });
+logSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 });
 logSchema.index({ entityType: 1, createdAt: -1 });
 logSchema.index({ actionName: 1, createdAt: -1 });
 logSchema.index({ performedBy: 1, createdAt: -1 });

@@ -16,7 +16,6 @@ const createIndexes = async () => {
         await Incident.collection.createIndex({ 'admissionNo': 1 });
         await Incident.collection.createIndex({ 'student': 1 });
         await Incident.collection.createIndex({ 'reportedBy': 1 });
-        await Incident.collection.createIndex({ 'assignedHandler.name': 1 });
         await Incident.collection.createIndex({ 'category': 1 });
         await Incident.collection.createIndex({ 'status': 1 });
         await Incident.collection.createIndex({ 'createdAt': -1 });

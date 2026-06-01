@@ -6,6 +6,7 @@
 
 'use strict';
 
+const fs = require('fs');
 const incidentService = require('../services/incidentService');
 const { bulkQueue } = require('../utils/asyncQueue');
 
@@ -218,6 +219,10 @@ const uploadIncidents = async (req, res, next) => {
             });
         }
         next(error);
+    } finally {
+        if (req.file?.path) {
+            fs.unlink(req.file.path, () => {});
+        }
     }
 };
 

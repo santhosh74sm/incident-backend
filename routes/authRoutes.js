@@ -29,7 +29,7 @@ router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
 router.get('/csrf', getCsrf);
 router.get('/csrf-token', getCsrf);
-router.post('/register', validate(registerSchema), registerUser);
+router.post('/register', authSensitiveRateLimiter, validate(registerSchema), registerUser);
 router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser);
 router.post('/refresh', refreshSession);
 router.post('/logout', logoutUser);

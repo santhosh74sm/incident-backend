@@ -21,9 +21,8 @@ const connectDB = async (attempt = 1) => {
             serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS) || 5000,
             socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS) || 45000,
             heartbeatFrequencyMS: Number(process.env.MONGO_HEARTBEAT_FREQUENCY_MS) || 10000,
-            // autoIndex: true is safe here — Mongoose deduplicates index creation.
-            // In production, you can run `npm run migrate:indexes` to create them manually.
-            autoIndex: true
+            // In production, run `npm run migrate:indexes` to create indexes manually.
+            autoIndex: process.env.NODE_ENV !== 'production'
         });
 
         logger.info('MongoDB connected', { host: conn.connection.host });

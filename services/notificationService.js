@@ -12,7 +12,7 @@ const Notification = require('../models/Notification');
 const AppError = require('../utils/AppError');
 const logger = require('../utils/pinoLogger');
 
-const NOTIFICATION_LIMIT = 7;
+const NOTIFICATION_LIMIT = 50;
 
 // Cache TTL for notification pushes — prevent duplicate SSE pushes within 500ms
 const pushDebounceMap = new Map();

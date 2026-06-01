@@ -34,6 +34,7 @@ const { buildCaseReportDocx } = require('./reports/caseReportService');
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
 const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
+const MAX_PROGRESS_LOGS = 500;
 const isAdministrationRole = (role) => ADMIN_ROLES.includes(role);
 
 const toIdString = (value) => {
@@ -99,6 +100,36 @@ const getPublicUploadPath = (file) => {
     if (file?.location) return file.location;
     if (!file?.filename) return null;
     return `/api/uploads/${file.filename}`;
+};
+
+const trimProgressLogsBeforePush = (incident) => {
+    if (incident.progressLogs.length >= MAX_PROGRESS_LOGS) {
+        incident.progressLogs.shift();
+    }
+};
+
+const extractS3KeyFromProtectedUrl = (fileUrl) => {
+    const marker = '/s3/';
+    const value = String(fileUrl || '');
+    const markerIndex = value.indexOf(marker);
+    if (markerIndex === -1) return '';
+
+    const key = value.slice(markerIndex + marker.length).split('?')[0].split('#')[0];
+    try {
+        return decodeURIComponent(key);
+    } catch {
+        return key;
+    }
+};
+
+const deleteIncidentEvidenceFromS3 = async (incident) => {
+    const keys = (incident.evidence || [])
+        .map((entry) => extractS3KeyFromProtectedUrl(entry?.fileUrl))
+        .filter(Boolean);
+
+    if (keys.length === 0) return;
+
+    await Promise.allSettled(keys.map((key) => s3StorageService.deleteObject(key)));
 };
 
 const buildEvidenceEntriesFromUploads = (files = [], evidenceDataList = []) =>
@@ -668,6 +699,7 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
     incident.approvalStatus = 'Approved';
     incident.approvedAt = Date.now();
     incident.assignedHandler = handlerId;
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
         note: 'COMMAND AUTHORIZED: CASE ASSIGNED TO HANDLER FOR INVESTIGATION.',
         updatedBy: `${user.name} (Admin)`,
@@ -718,6 +750,7 @@ const addProgressNote = async (incidentId, note, user) => {
         incident.inProgressAt = incident.inProgressAt || t;
     }
 
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: note || 'Operational field update recorded.', updatedBy: user.name, timestamp: Date.now() });
     if (incident.rejectionReason) incident.rejectionReason = null;
 
@@ -762,6 +795,7 @@ const requestClosure = async (incidentId, actionTaken, user) => {
 
     incident.closureRequested = true;
     incident.actionTaken = actionTaken;
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: 'CLOSURE REQUESTED: Investigation completed and submitted for final seal.', updatedBy: user.name, timestamp: Date.now() });
 
     await incident.save();
@@ -786,6 +820,7 @@ const finalizeClosure = async (incidentId, note, user) => {
     incident.closedBy = user.id;
     incident.closureRequested = false;
     incident.rejectionReason = null;
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: note || 'CASE PERMANENTLY SEALED: Admin authorized final closure.', updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
 
     await incident.save();
@@ -821,6 +856,7 @@ const rejectClosure = async (incidentId, reason, user) => {
     incident.status = 'In Progress';
     incident.inProgressAt = incident.inProgressAt || incident.progressAt || Date.now();
     incident.progressAt = incident.progressAt || incident.inProgressAt;
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: `CLOSURE REJECTED: ${rejectionReason}`, updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
 
     await incident.save();
@@ -842,6 +878,8 @@ const deleteIncident = async (incidentId, user) => {
         err.statusCode = 404;
         throw err;
     }
+
+    await deleteIncidentEvidenceFromS3(incident);
 
     await Incident.findByIdAndDelete(incidentId);
 
@@ -872,6 +910,7 @@ const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {
     }
 
     incident.evidence.push(...newEntries);
+    trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: `ADDED NEW EVIDENCE: ${newEntries.length} items attached by ${user.name}.`, updatedBy: user.name, timestamp: Date.now() });
 
     await incident.save();
@@ -1199,7 +1238,16 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
         Location.find().select('name').sort({ name: 1 }).lean(),
         EvidenceType.find().select('name').sort({ name: 1 }).lean(),
         Student.find().select('admissionNo name className section').limit(5).lean(),
-        User.find().select('email role name').lean(),
+        User.find({
+            role: {
+                $in: [
+                    'Super Admin',
+                    'Admin',
+                    'super_admin',
+                    'admin',
+                ],
+            },
+        }).select('email role name').lean(),
     ]);
 
     const templateData = [

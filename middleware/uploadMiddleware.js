@@ -36,8 +36,7 @@ const allowedExtensions = new Set([
     '.ppt',
     '.pptx',
     '.txt',
-    '.csv',
-    '.zip'
+    '.csv'
 ]);
 
 const allowedFileTypes = new Set([
@@ -51,26 +50,18 @@ const allowedFileTypes = new Set([
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel.sheet.macroenabled.12',
-    'application/vnd.ms-excel.sheet.binary.macroenabled.12',
     'application/vnd.oasis.opendocument.spreadsheet',
     'application/vnd.ms-powerpoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'text/plain',
     'text/csv',
     'application/csv',
-    'application/zip',
-    'application/x-zip-compressed',
-    'application/x-rar-compressed',
     'application/octet-stream',
-    'application/zip',
 ]);
 
 const spreadsheetExtensions = new Set(['.xls', '.xlsx', '.csv']);
 const spreadsheetFallbackMimeTypes = new Set([
     'application/octet-stream',
-    'application/zip',
-    'application/x-zip-compressed',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
@@ -123,7 +114,6 @@ const signaturesByExtension = {
     docx: ['zip', 'docx'],
     xlsx: ['zip', 'xlsx'],
     pptx: ['zip', 'pptx'],
-    zip: ['zip'],
 };
 
 const textExtensions = new Set(['txt', 'csv']);
