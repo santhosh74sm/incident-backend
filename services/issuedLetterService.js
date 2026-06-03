@@ -20,6 +20,7 @@ const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
 const { deleteS3ObjectOrThrow } = require('./s3CleanupService');
 const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
+const { tenantFilter, schoolScopedKey } = require('../utils/tenant');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -32,6 +33,7 @@ const toIdString = (value) => {
 
 const canAccessIncident = (incident, user) => {
     if (!incident || !user) return false;
+    if (String(incident.schoolId || '').toUpperCase() !== String(user.schoolId || '').toUpperCase()) return false;
     if (ADMIN_ROLES.has(user.role)) return true;
 
     const userId = toIdString(user.id || user._id);
@@ -47,7 +49,7 @@ const canAccessIncident = (incident, user) => {
 };
 
 const assertIncidentLetterAccess = async (incidentId, user) => {
-    const incident = await Incident.findById(incidentId)
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }))
         .select('reportedBy assignedHandler admissionNo')
         .lean();
 
@@ -217,7 +219,7 @@ const buildIncidentLetterData = async (incident) => {
     };
 
     if (incident.admissionNo) {
-        const student = await Student.findOne({ admissionNo: incident.admissionNo }).lean();
+        const student = await Student.findOne({ schoolId: incident.schoolId, admissionNo: incident.admissionNo }).lean();
         if (student) {
             studentData.studentName = student.name || studentData.studentName;
             studentData.class = student.className || studentData.class;
@@ -258,6 +260,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         }
 
         const matchingTemplate = await LetterTemplate.findOne({
+            schoolId: incident.schoolId,
             isActive: true,
             incidentCategory: { $regex: new RegExp(`^${escapeRegex(incidentCategory)}$`, 'i') },
         }).lean();
@@ -299,8 +302,9 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             };
         }
 
-        const letterNumber = await IssuedLetter.generateLetterNumber();
+        const letterNumber = await IssuedLetter.generateLetterNumber(incident.schoolId);
         const issuedLetter = new IssuedLetter({
+            schoolId: incident.schoolId,
             letterNumber,
             incident: incident._id,
             studentName: studentData.studentName,
@@ -402,7 +406,7 @@ const buildIncidentTimelineDateQuery = (startDateValue, endDateValue) => {
 };
 
 const buildLetterQuery = async (query) => {
-    const builtQuery = {};
+    const builtQuery = { schoolId: query.schoolId };
 
     const studentName = String(query.studentName || query.student || '').trim();
     if (studentName) {
@@ -440,7 +444,7 @@ const buildLetterQuery = async (query) => {
         query.toDate || query.endDate
     );
     if (incidentDateQuery) {
-        const matchingIncidentIds = await Incident.find(incidentDateQuery).distinct('_id');
+        const matchingIncidentIds = await Incident.find({ ...incidentDateQuery, schoolId: query.schoolId }).distinct('_id');
         builtQuery.incident = { $in: matchingIncidentIds };
     }
 
@@ -451,8 +455,8 @@ const buildLetterQuery = async (query) => {
 // CRUD operations
 // ─────────────────────────────────────────────────────────────────────────────
 
-const listIssuedLetters = async (query) => {
-    const builtQuery = await buildLetterQuery(query);
+const listIssuedLetters = async (query, user) => {
+    const builtQuery = await buildLetterQuery({ ...query, schoolId: user.schoolId });
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
 
@@ -484,8 +488,8 @@ const listIssuedLetters = async (query) => {
     return { paginated: false, data };
 };
 
-const getIssuedLetterById = async (id) => {
-    const letter = await IssuedLetter.findById(id)
+const getIssuedLetterById = async (id, user) => {
+    const letter = await IssuedLetter.findOne(tenantFilter(user, { _id: id }))
         .populate('issuedBy', 'name role')
         .populate('incident', 'title description category status location severity')
         .lean();
@@ -499,7 +503,7 @@ const getIssuedLetterById = async (id) => {
 
 const getLettersByIncident = async (incidentId, user) => {
     await assertIncidentLetterAccess(incidentId, user);
-    return IssuedLetter.find({ incident: incidentId })
+    return IssuedLetter.find(tenantFilter(user, { incident: incidentId }))
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -522,10 +526,10 @@ const getLettersByStudent = async (admissionNo, query, user) => {
         query.toDate || query.endDate
     );
     if (incidentDateQuery) {
-        const matchingIncidentIds = await Incident.find(incidentDateQuery).distinct('_id');
+        const matchingIncidentIds = await Incident.find({ ...incidentDateQuery, schoolId: user.schoolId }).distinct('_id');
         letterQuery.incident = { $in: matchingIncidentIds };
     }
-    return IssuedLetter.find(letterQuery)
+    return IssuedLetter.find(tenantFilter(user, letterQuery))
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -540,7 +544,7 @@ const getLetterStatusByIncidentIds = async (incidentIds, user) => {
 
     let allowedIncidentIds = incidentIds;
     if (!ADMIN_ROLES.has(user?.role)) {
-        const incidents = await Incident.find({ _id: { $in: incidentIds } })
+        const incidents = await Incident.find(tenantFilter(user, { _id: { $in: incidentIds } }))
             .select('reportedBy assignedHandler admissionNo')
             .lean();
         allowedIncidentIds = incidents
@@ -550,7 +554,7 @@ const getLetterStatusByIncidentIds = async (incidentIds, user) => {
 
     if (allowedIncidentIds.length === 0) return {};
 
-    const letters = await IssuedLetter.find({ incident: { $in: allowedIncidentIds } }).select(
+    const letters = await IssuedLetter.find(tenantFilter(user, { incident: { $in: allowedIncidentIds } })).select(
         'incident letterNumber generatedAt'
     ).lean();
     const statusMap = {};
@@ -564,22 +568,22 @@ const getLetterStatusByIncidentIds = async (incidentIds, user) => {
     return statusMap;
 };
 
-const generateLetterFromIncident = async (incidentId, language, userId) => {
-    const incident = await Incident.findById(incidentId);
+const generateLetterFromIncident = async (incidentId, language, user) => {
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found.');
         err.statusCode = 404;
         throw err;
     }
 
-    const existing = await IssuedLetter.findOne({ incident: incident._id, language });
+    const existing = await IssuedLetter.findOne(tenantFilter(user, { incident: incident._id, language }));
     if (existing) {
         return { alreadyExists: true, letter: existing };
     }
 
     // Offload DOCX rendering to letterQueue (non-blocking)
     const result = await letterQueue.push(
-        () => autoGenerateLetterFromIncident(incident, userId, language)
+        () => autoGenerateLetterFromIncident(incident, user.id || user._id, language)
     ).promise;
 
     if (!result.success) {
@@ -591,8 +595,8 @@ const generateLetterFromIncident = async (incidentId, language, userId) => {
     return { alreadyExists: false, letter: result.letter };
 };
 
-const updateIssuedLetter = async (id, body, userId) => {
-    const letter = await IssuedLetter.findById(id);
+const updateIssuedLetter = async (id, body, user) => {
+    const letter = await IssuedLetter.findOne(tenantFilter(user, { _id: id }));
     if (!letter) {
         const err = new Error('Letter not found');
         err.statusCode = 404;
@@ -610,7 +614,7 @@ const updateIssuedLetter = async (id, body, userId) => {
 
     await letter.save();
 
-    createLog('Letter Updated', userId, 'Letter', letter._id, {
+    createLog('Letter Updated', user.id || user._id, 'Letter', letter._id, {
         status: letter.status,
         letterNumber: letter.letterNumber,
         incidentId: letter.incident,
@@ -619,8 +623,12 @@ const updateIssuedLetter = async (id, body, userId) => {
     return letter;
 };
 
-const deleteIssuedLetter = async (id, userId) => {
-    const letter = await IssuedLetter.findById(id);
+const deleteIssuedLetter = async (id, user) => {
+    const actorId = user?.id || user?._id || user;
+    const schoolId = user?.schoolId;
+    const letter = schoolId
+        ? await IssuedLetter.findOne(tenantFilter(user, { _id: id }))
+        : await IssuedLetter.findById(id);
     if (!letter) {
         const err = new Error('Letter not found');
         err.statusCode = 404;
@@ -632,13 +640,14 @@ const deleteIssuedLetter = async (id, userId) => {
             operation: 'deleteIssuedLetter',
             letterId: id,
             letterNumber: letter.letterNumber,
-            actorId: userId,
+            actorId,
         });
     }
 
-    await IssuedLetter.findByIdAndDelete(id);
+    if (schoolId) await IssuedLetter.findOneAndDelete(tenantFilter(user, { _id: id }));
+    else await IssuedLetter.findByIdAndDelete(id);
 
-    createLog('Letter Deleted', userId, 'Letter', letter._id, {
+    createLog('Letter Deleted', actorId, 'Letter', letter._id, {
         letterNumber: letter.letterNumber,
         studentName: letter.studentName,
         incidentId: letter.incident,
@@ -647,11 +656,11 @@ const deleteIssuedLetter = async (id, userId) => {
     return { message: 'Letter deleted successfully' };
 };
 
-const getLetterFilterOptions = async () => {
+const getLetterFilterOptions = async (user) => {
     const [classes, sections, categories] = await Promise.all([
-        IssuedLetter.distinct('className'),
-        IssuedLetter.distinct('section'),
-        IssuedLetter.distinct('incidentCategory'),
+        IssuedLetter.distinct('className', tenantFilter(user)),
+        IssuedLetter.distinct('section', tenantFilter(user)),
+        IssuedLetter.distinct('incidentCategory', tenantFilter(user)),
     ]);
 
     return {
@@ -689,8 +698,8 @@ const generateLetterFilename = (letter, extension) => {
     return `${title}_${className}_${section}_${studentName}_${admissionNo}.${extension}`;
 };
 
-const getLetterDocxDownload = async (id) => {
-    const letter = await IssuedLetter.findById(id);
+const getLetterDocxDownload = async (id, user) => {
+    const letter = await IssuedLetter.findOne(tenantFilter(user, { _id: id }));
     if (!letter) {
         const err = new Error('Letter not found');
         err.statusCode = 404;

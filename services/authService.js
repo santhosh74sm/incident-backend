@@ -1,10 +1,13 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Student = require('../models/Student');
+const SchoolWorkspace = require('../models/SchoolWorkspace');
 const { createLog } = require('../utils/logger');
 const { revokeUserSessions } = require('./sessionService');
 const AppError = require('../utils/AppError');
+const { assertSchoolId, tenantFilter } = require('../utils/tenant');
 
 const ROLE_MAP = {
     'super admin': 'Super Admin',
@@ -37,7 +40,31 @@ const getActorId = (actor) => actor?.id || actor?._id || 'System';
 
 const isAdminRole = (role) => ADMIN_ROLES.includes(toClientRole(role));
 
-const getAdminExists = async () => Boolean(await User.exists({ role: { $in: ['Super Admin', 'super_admin'] } }));
+const getAdminExists = async () => Boolean(await SchoolWorkspace.exists({ status: 'active' }));
+
+const buildSchoolCode = (schoolName) => {
+    const ignored = new Set(['SCHOOL', 'HIGHER', 'SECONDARY', 'MATRIC', 'PUBLIC', 'THE']);
+    const tokens = String(schoolName || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9 ]/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token && !ignored.has(token));
+    const letters = (tokens.map((token) => token[0]).join('') || String(schoolName || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'SCH')
+        .slice(0, 3)
+        .padEnd(3, 'X');
+    return letters;
+};
+
+const generateSchoolId = async (schoolName, session) => {
+    const code = buildSchoolCode(schoolName);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        const sequence = await SchoolWorkspace.countDocuments({}).session(session) + attempt + 1;
+        const candidate = `SCH-${code}${String(sequence).padStart(3, '0')}`;
+        const exists = await SchoolWorkspace.exists({ schoolId: candidate }).session(session);
+        if (!exists) return candidate;
+    }
+    return `SCH-${code}${crypto.randomInt(100, 999)}${Date.now().toString().slice(-3)}`;
+};
 
 const ensureCanCreateRole = (actorRole, targetRole) => {
     if (actorRole === 'Super Admin') {
@@ -90,24 +117,17 @@ const registerUser = async ({ input, actor }) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const superAdminExists = await User.exists({ role: { $in: ['Super Admin', 'super_admin'] } });
-    let normalizedRole;
-
-    if (!superAdminExists) {
-        normalizedRole = 'Super Admin';
-    } else {
-        if (!actor) {
-            throw new AppError('Registration is closed. Please ask an administrator to create your account.', 403);
-        }
-
-        normalizedRole = ROLE_MAP[String(role).trim().toLowerCase()];
-        if (!normalizedRole) {
-            throw new AppError('Invalid staff role', 400);
-        }
-
-        ensureCanCreateRole(toClientRole(actor?.role), normalizedRole);
-
+    if (!actor?.schoolId) {
+        throw new AppError('Public staff registration is closed. Create a school workspace instead.', 403);
     }
+
+    const schoolId = assertSchoolId(actor.schoolId);
+    const normalizedRole = ROLE_MAP[String(role).trim().toLowerCase()];
+    if (!normalizedRole) {
+        throw new AppError('Invalid staff role', 400);
+    }
+
+    ensureCanCreateRole(toClientRole(actor?.role), normalizedRole);
 
     const userExists = await User.findOne({ email: normalizedEmail }).select('_id').lean();
     if (userExists) {
@@ -118,6 +138,7 @@ const registerUser = async ({ input, actor }) => {
     const user = await User.create({
         name: name.trim(),
         email: normalizedEmail,
+        schoolId,
         password: await bcrypt.hash(password, salt),
         role: normalizedRole,
         class: userClass || '',
@@ -156,7 +177,77 @@ const registerUser = async ({ input, actor }) => {
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
+            schoolId: user.schoolId,
             mustChangePassword: user.mustChangePassword,
+        },
+    };
+};
+
+const createWorkspace = async ({ input }) => {
+    const { schoolName, superAdminName, email, password } = input;
+    if (!isStrongPassword(password)) {
+        throw new AppError(PASSWORD_POLICY_MESSAGE, 400);
+    }
+
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const userExists = await User.findOne({ email: normalizedEmail }).select('_id').lean();
+    const workspaceEmailExists = await SchoolWorkspace.findOne({ email: normalizedEmail }).select('_id').lean();
+    if (userExists || workspaceEmailExists) {
+        throw new AppError('Email already exists. Use a globally unique email address.', 400);
+    }
+
+    const session = await mongoose.startSession();
+    let createdUser;
+    let workspace;
+    try {
+        await session.withTransaction(async () => {
+            const schoolId = await generateSchoolId(schoolName, session);
+            [workspace] = await SchoolWorkspace.create([{
+                schoolId,
+                schoolName: schoolName.trim(),
+                superAdminName: superAdminName.trim(),
+                email: normalizedEmail,
+                status: 'active',
+            }], { session });
+
+            const salt = await bcrypt.genSalt(12);
+            [createdUser] = await User.create([{
+                name: superAdminName.trim(),
+                email: normalizedEmail,
+                schoolId,
+                password: await bcrypt.hash(password, salt),
+                role: 'Super Admin',
+                class: '',
+                mustChangePassword: false,
+                passwordChangedAt: new Date(),
+            }], { session });
+        });
+    } finally {
+        await session.endSession();
+    }
+
+    createLog(
+        'WORKSPACE_CREATED',
+        createdUser._id,
+        'System',
+        workspace._id,
+        {
+            schoolId: workspace.schoolId,
+            schoolName: workspace.schoolName,
+            targetLabel: workspace.schoolName,
+        }
+    );
+
+    return {
+        user: createdUser,
+        response: {
+            id: createdUser._id,
+            name: createdUser.name,
+            email: createdUser.email,
+            role: toClientRole(createdUser.role),
+            schoolId: createdUser.schoolId,
+            schoolName: workspace.schoolName,
+            mustChangePassword: false,
         },
     };
 };
@@ -183,15 +274,22 @@ const loginStaff = async ({ email, password }) => {
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
+            schoolId: user.schoolId,
             mustChangePassword: user.mustChangePassword,
         },
         tokenType: 'staff',
     };
 };
 
-const loginStudent = async ({ email, password }) => {
+const loginStudent = async ({ email, password, schoolId }) => {
     const admissionNo = String(email || '').trim();
-    const student = await Student.findOne({ admissionNo }).select('+password');
+    const normalizedSchoolId = schoolId ? assertSchoolId(schoolId) : '';
+    const studentQuery = normalizedSchoolId ? { schoolId: normalizedSchoolId, admissionNo } : { admissionNo };
+    const matchingStudents = await Student.find(studentQuery).select('+password').limit(2);
+    if (!normalizedSchoolId && matchingStudents.length > 1) {
+        throw new AppError('School workspace is required for this student sign-in.', 400);
+    }
+    const student = matchingStudents[0];
     const expectedLegacyPassword = `ST${admissionNo}`;
     let passwordMatches = false;
 
@@ -217,19 +315,20 @@ const loginStudent = async ({ email, password }) => {
             name: student.name,
             role: 'Student',
             admissionNo: student.admissionNo,
+            schoolId: student.schoolId,
             mustChangePassword: student.mustChangePassword,
         },
         tokenType: 'student',
     };
 };
 
-const loginUser = async ({ email, password, loginType }) => {
+const loginUser = async ({ email, password, loginType, schoolId }) => {
     if (loginType === 'staff') {
         return loginStaff({ email, password });
     }
 
     if (loginType === 'student') {
-        return loginStudent({ email, password });
+        return loginStudent({ email, password, schoolId });
     }
 
     throw new AppError('Login type not specified', 400);
@@ -240,6 +339,7 @@ const getCurrentUserResponse = (user) => ({
     name: user.name,
     email: user.email,
     role: toClientRole(user.role),
+    schoolId: user.schoolId,
     admissionNo: user.admissionNo,
     mustChangePassword: user.mustChangePassword,
 });
@@ -247,8 +347,8 @@ const getCurrentUserResponse = (user) => ({
 const getAllUsers = async ({ actor } = {}) => {
     const actorRole = toClientRole(actor?.role);
     const query = isAdminRole(actorRole)
-        ? { role: { $in: STAFF_ROLES } }
-        : { role: { $in: TEACHER_ROLES } };
+        ? tenantFilter(actor, { role: { $in: STAFF_ROLES } })
+        : tenantFilter(actor, { role: { $in: TEACHER_ROLES } });
     const users = await User.find(query).select('-password').lean();
     return users.map((user) => ({
         ...user,
@@ -257,7 +357,7 @@ const getAllUsers = async ({ actor } = {}) => {
 };
 
 const deleteUser = async ({ id, actor }) => {
-    const user = await User.findById(id);
+    const user = await User.findOne(tenantFilter(actor, { _id: id }));
 
     if (!user) {
         throw new AppError('Staff member not found', 404);
@@ -286,7 +386,7 @@ const generateTemporaryPassword = () => {
 };
 
 const resetUserPassword = async ({ id, actor }) => {
-    const user = await User.findById(id).exec();
+    const user = await User.findOne(tenantFilter(actor, { _id: id })).exec();
     if (!user) {
         throw new AppError('Staff member not found', 404);
     }
@@ -318,6 +418,7 @@ const resetUserPassword = async ({ id, actor }) => {
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
+            schoolId: user.schoolId,
             mustChangePassword: user.mustChangePassword,
         },
     };
@@ -362,6 +463,7 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
                 name: user.name,
                 email: user.email,
                 role: toClientRole(user.role),
+                schoolId: user.schoolId,
                 mustChangePassword: false,
             },
             mustChangePassword: false,
@@ -425,9 +527,10 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
             user: {
                 id: student._id,
                 name: student.name,
-                role: 'Student',
-                admissionNo: student.admissionNo,
-                mustChangePassword: false,
+            role: 'Student',
+            admissionNo: student.admissionNo,
+            schoolId: student.schoolId,
+            mustChangePassword: false,
             },
             mustChangePassword: false,
         },
@@ -437,6 +540,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
 module.exports = {
     toClientRole,
     getAdminExists,
+    createWorkspace,
     registerUser,
     loginUser,
     getCurrentUserResponse,

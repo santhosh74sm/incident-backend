@@ -2,7 +2,7 @@ const optionService = require('../services/optionService');
 
 const getCategories = async (req, res, next) => {
     try {
-        res.status(200).json(await optionService.getCategories());
+        res.status(200).json(await optionService.getCategories(req.user));
     } catch (error) {
         next(error);
     }

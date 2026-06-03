@@ -2,6 +2,13 @@ const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema(
     {
+        schoolId: {
+            type: String,
+            required: true,
+            uppercase: true,
+            trim: true,
+            index: true,
+        },
         recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         type: { type: String, default: 'SYSTEM_ACTIVITY' },
         incident: { type: mongoose.Schema.Types.ObjectId, ref: 'Incident', default: null },
@@ -28,9 +35,9 @@ const notificationSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-notificationSchema.index({ recipient: 1, createdAt: -1 });
-notificationSchema.index({ recipient: 1, read: 1 });
-notificationSchema.index({ recipient: 1, actionName: 1, createdAt: -1 });
-notificationSchema.index({ recipient: 1, routePath: 1, createdAt: -1 });
+notificationSchema.index({ schoolId: 1, recipient: 1, createdAt: -1 });
+notificationSchema.index({ schoolId: 1, recipient: 1, read: 1 });
+notificationSchema.index({ schoolId: 1, recipient: 1, actionName: 1, createdAt: -1 });
+notificationSchema.index({ schoolId: 1, recipient: 1, routePath: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Notification', notificationSchema);

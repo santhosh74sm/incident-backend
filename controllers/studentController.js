@@ -2,7 +2,7 @@ const studentService = require('../services/studentService');
 
 const getFilters = async (req, res, next) => {
     try {
-        res.json(await studentService.getFilters());
+        res.json(await studentService.getFilters(req.user));
     } catch (error) {
         next(error);
     }
@@ -10,7 +10,7 @@ const getFilters = async (req, res, next) => {
 
 const getStudentsByFilter = async (req, res, next) => {
     try {
-        res.json(await studentService.getStudentsByFilter(req.query));
+        res.json(await studentService.getStudentsByFilter({ ...req.query, actor: req.user }));
     } catch (error) {
         next(error);
     }
@@ -18,7 +18,7 @@ const getStudentsByFilter = async (req, res, next) => {
 
 const getAllStudents = async (req, res, next) => {
     try {
-        res.json(await studentService.getAllStudents(req.query));
+        res.json(await studentService.getAllStudents(req.query, req.user));
     } catch (error) {
         next(error);
     }
@@ -61,7 +61,7 @@ const createStudent = async (req, res, next) => {
 
 const getStudentBehavioralSummary = async (req, res, next) => {
     try {
-        res.json(await studentService.getStudentBehavioralSummary(req.params.id));
+        res.json(await studentService.getStudentBehavioralSummary(req.params.id, req.user));
     } catch (error) {
         next(error);
     }

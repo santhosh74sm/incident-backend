@@ -14,12 +14,14 @@ const generateToken = (user, type = 'staff') => {
 
     const id = user?._id || user?.id || user;
     const role = user?.role || (type === 'student' ? 'Student' : undefined);
+    const schoolId = user?.schoolId;
 
     return jwt.sign(
         {
             sub: id.toString(),
             type,
             role,
+            schoolId,
             tokenVersion: user?.tokenVersion ?? 0,
         },
         secret,

@@ -9,6 +9,7 @@ const AppError = require('../utils/AppError');
 const { generateStudentInitialPassword } = require('./studentAuthService');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
+const { tenantDoc, tenantFilter } = require('../utils/tenant');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section'];
 
@@ -17,10 +18,10 @@ const getActorId = (actor) => actor?.id || actor?._id || 'System';
 const normalizeStudentInput = (input = {}) => pick(input, STUDENT_FIELDS);
 const normalizeAdmissionNo = (value) => String(value || '').trim();
 
-const getFilters = async () => {
+const getFilters = async (actor) => {
     const [classes, sections] = await Promise.all([
-        Student.distinct('className'),
-        Student.distinct('section'),
+        Student.distinct('className', tenantFilter(actor)),
+        Student.distinct('section', tenantFilter(actor)),
     ]);
 
     return {
@@ -29,8 +30,8 @@ const getFilters = async () => {
     };
 };
 
-const getStudentsByFilter = async ({ className, section, search, page, limit } = {}) => {
-    const query = {};
+const getStudentsByFilter = async ({ className, section, search, page, limit, actor } = {}) => {
+    const query = tenantFilter(actor);
     if (className) query.className = className;
     if (section) query.section = section;
 
@@ -64,16 +65,17 @@ const getStudentsByFilter = async ({ className, section, search, page, limit } =
     };
 };
 
-const getAllStudents = async (query = {}) => {
+const getAllStudents = async (query = {}, actor = null) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
+    const scopedQuery = tenantFilter(actor);
     if (!shouldPaginate) {
-        return Student.find({}).sort({ name: 1 }).lean();
+        return Student.find(scopedQuery).sort({ name: 1 }).lean();
     }
 
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
     const [students, total] = await Promise.all([
-        Student.find({}).sort({ name: 1 }).skip(pagination.skip).limit(pagination.limit).lean(),
-        Student.countDocuments({}),
+        Student.find(scopedQuery).sort({ name: 1 }).skip(pagination.skip).limit(pagination.limit).lean(),
+        Student.countDocuments(scopedQuery),
     ]);
 
     return {
@@ -86,7 +88,7 @@ const getAllStudents = async (query = {}) => {
     };
 };
 
-const buildStudentsFromUploadRows = async (rows) => {
+const buildStudentsFromUploadRows = async (rows, actor) => {
     const generatedCredentials = [];
 
     const students = await Promise.all(rows.map(async (row) => {
@@ -99,6 +101,7 @@ const buildStudentsFromUploadRows = async (rows) => {
         });
 
         return {
+            schoolId: actor.schoolId,
             admissionNo,
             name: row.name,
             className: row.class ? row.class.toString() : '',
@@ -132,9 +135,9 @@ const uploadStudents = async ({ filePath, actor }) => {
         const admissionNumbers = validRows.map((row) => normalizeAdmissionNo(row.admissionNo)).filter(Boolean);
         
         // Use lean() for fast pre-upload checks
-        const existingStudents = await Student.find({
+        const existingStudents = await Student.find(tenantFilter(actor, {
             admissionNo: { $in: admissionNumbers },
-        }).select('admissionNo').lean();
+        })).select('admissionNo').lean();
 
         const existingIds = new Set(existingStudents.map((s) => s.admissionNo));
         const seenInExcel = new Set();
@@ -160,7 +163,7 @@ const uploadStudents = async ({ filePath, actor }) => {
             throw new AppError('No valid new students to insert. All rows are duplicates or invalid.', 400);
         }
 
-        const { students, generatedCredentials } = await buildStudentsFromUploadRows(finalValidRows);
+        const { students, generatedCredentials } = await buildStudentsFromUploadRows(finalValidRows, actor);
 
         let insertedCount = 0;
         if (students.length > 0) {
@@ -202,12 +205,13 @@ const uploadStudents = async ({ filePath, actor }) => {
 };
 
 const deleteStudent = async ({ studentId, actor }) => {
-    const student = await Student.findById(studentId).lean();
+    const student = await Student.findOne(tenantFilter(actor, { _id: studentId })).lean();
     if (!student) {
         throw new AppError('Student not found', 404);
     }
 
     const relatedIncidentQuery = {
+        schoolId: actor.schoolId,
         $or: [
             { admissionNo: student.admissionNo },
             { studentsInvolved: student.name },
@@ -223,12 +227,13 @@ const deleteStudent = async ({ studentId, actor }) => {
     }
 
     const remainingLetters = await IssuedLetter.find({
+        schoolId: actor.schoolId,
         admissionNo: student.admissionNo,
     }).select('_id').lean();
     for (const letter of remainingLetters) {
-        await deleteIssuedLetter(letter._id, getActorId(actor));
+        await deleteIssuedLetter(letter._id, actor);
     }
-    await Student.findByIdAndDelete(studentId);
+    await Student.findOneAndDelete(tenantFilter(actor, { _id: studentId }));
 
     createLog(
         'ADMIN_DELETE_USER',
@@ -243,7 +248,7 @@ const deleteStudent = async ({ studentId, actor }) => {
 
 const createStudent = async ({ input, actor }) => {
     const studentInput = normalizeStudentInput(input);
-    const existingStudent = await Student.findOne({ admissionNo: studentInput.admissionNo }).select('_id').lean();
+    const existingStudent = await Student.findOne(tenantFilter(actor, { admissionNo: studentInput.admissionNo })).select('_id').lean();
 
     if (existingStudent) {
         throw new AppError('Admission Number already exists. Duplicate IDs are not allowed.', 400);
@@ -251,6 +256,7 @@ const createStudent = async ({ input, actor }) => {
 
     const credentials = await generateStudentInitialPassword();
     const student = await Student.create({
+        ...tenantDoc(actor),
         ...studentInput,
         password: credentials.hash,
         mustChangePassword: true,
@@ -285,15 +291,15 @@ const createStudent = async ({ input, actor }) => {
     };
 };
 
-const getStudentBehavioralSummary = async (studentId) => {
-    const student = await Student.findById(studentId).lean();
+const getStudentBehavioralSummary = async (studentId, actor) => {
+    const student = await Student.findOne(tenantFilter(actor, { _id: studentId })).lean();
     if (!student) {
         throw new AppError('Student not found', 404);
     }
 
     const [incidents, lettersCount] = await Promise.all([
-        Incident.find({ admissionNo: student.admissionNo }).sort({ createdAt: -1 }).lean(),
-        IssuedLetter.countDocuments({ admissionNo: student.admissionNo }),
+        Incident.find(tenantFilter(actor, { admissionNo: student.admissionNo })).sort({ createdAt: -1 }).lean(),
+        IssuedLetter.countDocuments(tenantFilter(actor, { admissionNo: student.admissionNo })),
     ]);
 
     const categoryBreakdown = {};
@@ -331,7 +337,7 @@ const syncStudentReferences = async (oldStudent, updatedStudent) => {
     }
 
     await Incident.updateMany(
-        { admissionNo: oldStudent.admissionNo },
+        { schoolId: oldStudent.schoolId, admissionNo: oldStudent.admissionNo },
         {
             $set: {
                 admissionNo: updatedStudent.admissionNo,
@@ -343,14 +349,14 @@ const syncStudentReferences = async (oldStudent, updatedStudent) => {
 
     if (oldStudent.name !== updatedStudent.name) {
         await Incident.updateMany(
-            { admissionNo: updatedStudent.admissionNo, studentsInvolved: oldStudent.name },
+            { schoolId: oldStudent.schoolId, admissionNo: updatedStudent.admissionNo, studentsInvolved: oldStudent.name },
             { $set: { 'studentsInvolved.$[elem]': updatedStudent.name } },
             { arrayFilters: [{ elem: oldStudent.name }] }
         );
     }
 
     await IssuedLetter.updateMany(
-        { admissionNo: oldStudent.admissionNo },
+        { schoolId: oldStudent.schoolId, admissionNo: oldStudent.admissionNo },
         {
             $set: {
                 admissionNo: updatedStudent.admissionNo,
@@ -363,7 +369,7 @@ const syncStudentReferences = async (oldStudent, updatedStudent) => {
 };
 
 const updateStudent = async ({ studentId, input, actor }) => {
-    const oldStudent = await Student.findById(studentId);
+    const oldStudent = await Student.findOne(tenantFilter(actor, { _id: studentId }));
     if (!oldStudent) {
         throw new AppError('Student not found', 404);
     }
@@ -372,6 +378,7 @@ const updateStudent = async ({ studentId, input, actor }) => {
 
     if (studentInput.admissionNo) {
         const existingStudent = await Student.findOne({
+            schoolId: actor.schoolId,
             admissionNo: studentInput.admissionNo,
             _id: { $ne: studentId },
         }).select('_id').lean();
@@ -381,8 +388,8 @@ const updateStudent = async ({ studentId, input, actor }) => {
         }
     }
 
-    const updatedStudent = await Student.findByIdAndUpdate(
-        studentId,
+    const updatedStudent = await Student.findOneAndUpdate(
+        tenantFilter(actor, { _id: studentId }),
         studentInput,
         { new: true, runValidators: true }
     );

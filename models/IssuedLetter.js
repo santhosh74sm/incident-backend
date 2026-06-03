@@ -3,8 +3,15 @@ const mongoose = require('mongoose');
 const issuedLetterSchema = new mongoose.Schema({
     letterNumber: {
         type: String,
-        unique: true,
         index: true
+    },
+    schoolId: {
+        type: String,
+        required: true,
+        immutable: true,
+        uppercase: true,
+        trim: true,
+        index: true,
     },
     incident: {
         type: mongoose.Schema.Types.ObjectId,
@@ -88,13 +95,15 @@ const issuedLetterSchema = new mongoose.Schema({
     collection: 'issued_letters'
 });
 
-issuedLetterSchema.index({ studentName: 1, className: 1 });
-issuedLetterSchema.index({ className: 1, section: 1 });
-issuedLetterSchema.index({ generatedAt: -1 });
+issuedLetterSchema.index({ schoolId: 1, letterNumber: 1 }, { unique: true });
+issuedLetterSchema.index({ schoolId: 1, studentName: 1, className: 1 });
+issuedLetterSchema.index({ schoolId: 1, className: 1, section: 1 });
+issuedLetterSchema.index({ schoolId: 1, generatedAt: -1 });
 
-issuedLetterSchema.statics.generateLetterNumber = async function() {
+issuedLetterSchema.statics.generateLetterNumber = async function(schoolId) {
     const year = new Date().getFullYear();
     const lastLetter = await this.findOne({
+        schoolId,
         letterNumber: new RegExp(`^LET-${year}-`)
     }).sort({ letterNumber: -1 });
 
@@ -110,6 +119,7 @@ issuedLetterSchema.statics.generateLetterNumber = async function() {
 
     // Fallback if parsing fails
     const count = await this.countDocuments({
+        schoolId,
         letterNumber: new RegExp(`^LET-${year}-`)
     });
     return `LET-${year}-${String(count + 1).padStart(5, '0')}`;

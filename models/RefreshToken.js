@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const refreshTokenSchema = new mongoose.Schema(
     {
         user: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
+        schoolId: { type: String, required: true, uppercase: true, trim: true, index: true },
         userModel: { type: String, enum: ['User', 'Student'], required: true },
         type: { type: String, enum: ['staff', 'student'], required: true },
         tokenHash: { type: String, required: true, unique: true, index: true },
@@ -19,6 +20,6 @@ const refreshTokenSchema = new mongoose.Schema(
 );
 
 refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-refreshTokenSchema.index({ user: 1, familyId: 1 });
+refreshTokenSchema.index({ schoolId: 1, user: 1, familyId: 1 });
 
 module.exports = mongoose.model('RefreshToken', refreshTokenSchema);

@@ -11,7 +11,7 @@ const validate = require('../middleware/validate.middleware');
 const { fieldOperationOptionSchema, reorderOptionsSchema } = require('../validators/optionValidators');
 const { objectIdParamSchema } = require('../validators/commonValidators');
 
-router.get('/', getOptions);
+router.get('/', protect, getOptions);
 router.post('/', protect, validate(fieldOperationOptionSchema), addOption);
 router.delete('/:id', protect, validate(objectIdParamSchema, 'params'), deleteOption);
 router.put('/reorder', protect, validate(reorderOptionsSchema), reorderOptions);

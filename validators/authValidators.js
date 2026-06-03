@@ -16,10 +16,24 @@ const registerSchema = z.object({
     class: z.string().trim().max(40).optional().default(''),
 });
 
+const workspaceSchema = z.object({
+    schoolName: z.string().trim().min(2).max(160),
+    superAdminName: z.string().trim().min(1).max(120),
+    email: z.string().trim().email().max(254),
+    password: z.string()
+        .min(PASSWORD_MIN_LENGTH, 'Password must be at least 8 characters')
+        .max(200)
+        .regex(/[a-z]/, 'Password must include a lowercase letter')
+        .regex(/[A-Z]/, 'Password must include an uppercase letter')
+        .regex(/\d/, 'Password must include a number')
+        .regex(/[^A-Za-z0-9]/, 'Password must include a symbol'),
+});
+
 const loginSchema = z.object({
     email: z.string().trim().min(1).max(254),
     password: z.string().min(1).max(200),
     loginType: z.enum(['staff', 'student']),
+    schoolId: z.string().trim().max(40).optional(),
 });
 
 const changeStudentPasswordSchema = z
@@ -41,6 +55,7 @@ const changeStudentPasswordSchema = z
 
 module.exports = {
     registerSchema,
+    workspaceSchema,
     loginSchema,
     changeStudentPasswordSchema,
 };

@@ -24,6 +24,9 @@ const normalizeRoleForApp = (user) => {
     if (user?._id && !user.id) {
         user.id = user._id.toString();
     }
+    if (user?.schoolId) {
+        user.schoolId = String(user.schoolId).trim().toUpperCase();
+    }
     return user;
 };
 
@@ -92,7 +95,24 @@ const attachUser = async (req, token) => {
         throw error;
     }
 
-    req.user = normalizeRoleForApp(user);
+    const normalizedUser = normalizeRoleForApp(user);
+
+    if (!normalizedUser.schoolId) {
+        const error = new Error('Account is not assigned to a school workspace.');
+        error.statusCode = 401;
+        throw error;
+    }
+
+    if (
+        decoded.schoolId &&
+        String(decoded.schoolId).trim().toUpperCase() !== String(normalizedUser.schoolId).trim().toUpperCase()
+    ) {
+        const error = new Error('Session workspace mismatch. Please log in again.');
+        error.statusCode = 401;
+        throw error;
+    }
+
+    req.user = normalizedUser;
 };
 
 const protect = async (req, res, next) => {

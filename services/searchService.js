@@ -1,6 +1,7 @@
 const Student = require('../models/Student');
 const Incident = require('../models/Incident');
 const IssuedLetter = require('../models/IssuedLetter');
+const { tenantFilter } = require('../utils/tenant');
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -35,7 +36,7 @@ const buildNavigationCommands = (query) => {
         }));
 };
 
-const globalSearch = async (queryValue = '') => {
+const globalSearch = async (queryValue = '', actor) => {
     const query = String(queryValue || '').trim();
     if (!query) {
         return { results: buildNavigationCommands('') };
@@ -44,23 +45,23 @@ const globalSearch = async (queryValue = '') => {
     const regex = new RegExp(escapeRegex(query), 'i');
 
     const [students, incidents, letters] = await Promise.all([
-        Student.find({
+        Student.find(tenantFilter(actor, {
             $or: [{ name: { $regex: regex } }, { admissionNo: { $regex: regex } }],
-        })
+        }))
             .select('name admissionNo className section')
             .sort({ updatedAt: -1 })
             .limit(8)
             .lean(),
-        Incident.find({
+        Incident.find(tenantFilter(actor, {
             $or: [{ category: { $regex: regex } }, { title: { $regex: regex } }, { description: { $regex: regex } }],
-        })
+        }))
             .select('title category status createdAt')
             .sort({ createdAt: -1 })
             .limit(8)
             .lean(),
-        IssuedLetter.find({
+        IssuedLetter.find(tenantFilter(actor, {
             $or: [{ letterNumber: { $regex: regex } }, { title: { $regex: regex } }],
-        })
+        }))
             .select('letterNumber title incidentCategory generatedAt')
             .sort({ generatedAt: -1 })
             .limit(8)

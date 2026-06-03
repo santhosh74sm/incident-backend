@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const s3StorageService = require('../services/s3StorageService');
+const { schoolScopedKey } = require('../utils/tenant');
 const { validateDocxBuffer } = require('../utils/docxSecurity');
 
 const uploadDir = path.join(__dirname, '..', 'uploads');
@@ -201,7 +202,7 @@ const uploadValidatedFilesToS3 = async (req, res, next) => {
 
             const result = await s3StorageService.uploadBuffer({
                 buffer: file.buffer,
-                folder: 'uploads',
+                key: schoolScopedKey(req.user?.schoolId, 'evidence', `${Date.now()}-${file.originalname}`),
                 filename: file.originalname,
                 contentType: file.mimetype,
             });

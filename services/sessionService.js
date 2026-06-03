@@ -34,6 +34,7 @@ const createRefreshSession = async ({ user, type, req, familyId = crypto.randomU
 
     await RefreshToken.create({
         user: user._id || user.id,
+        schoolId: user.schoolId,
         userModel: getUserModelName(type),
         type,
         tokenHash,

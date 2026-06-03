@@ -125,6 +125,11 @@ router.get(/^\/s3\/(.+)/, protect, async (req, res, next) => {
             return res.status(400).json({ message: 'Invalid file key' });
         }
 
+        const allowedPrefix = `schools/${req.user.schoolId}/`;
+        if (!key.startsWith(allowedPrefix)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
         const object = await s3StorageService.getObjectStream(key);
         const contentType = normalizeMimeType(object.contentType, key);
 

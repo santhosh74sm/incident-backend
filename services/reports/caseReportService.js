@@ -3,6 +3,7 @@
 const mongoose = require('mongoose');
 const Incident = require('../../models/Incident');
 const Student = require('../../models/Student');
+const { tenantFilter } = require('../../utils/tenant');
 const {
     DOCX_MIME_TYPE,
     createSimpleDocx,
@@ -20,6 +21,12 @@ const toIdString = (value) => {
 
 const assertReportAccess = (incident, user) => {
     if (!incident || !user) {
+        const err = new Error('You are not allowed to export this incident.');
+        err.statusCode = 403;
+        throw err;
+    }
+
+    if (String(incident.schoolId || '').toUpperCase() !== String(user.schoolId || '').toUpperCase()) {
         const err = new Error('You are not allowed to export this incident.');
         err.statusCode = 403;
         throw err;
@@ -87,7 +94,7 @@ const resolveStudentSnapshot = async (incident) => {
         };
     }
 
-    const student = await Student.findOne({ admissionNo: incident.admissionNo })
+    const student = await Student.findOne({ schoolId: incident.schoolId, admissionNo: incident.admissionNo })
         .select('name className section')
         .lean();
 
@@ -154,7 +161,7 @@ const buildCaseReportDocx = async (incidentId, user) => {
         throw err;
     }
 
-    const incident = await Incident.findById(incidentId)
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }))
         .populate('reportedBy', 'name role')
         .populate('assignedHandler', 'name role')
         .populate('closedBy', 'name role')

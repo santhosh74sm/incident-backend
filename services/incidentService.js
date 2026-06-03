@@ -15,7 +15,6 @@ const User = require('../models/User');
 const Category = require('../models/Category');
 const Location = require('../models/Location');
 const EvidenceType = require('../models/EvidenceType');
-const Log = require('../models/Log');
 
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
@@ -28,6 +27,7 @@ const {
     deleteIncidentFilesFromS3OrThrow,
 } = require('./s3CleanupService');
 const { buildCaseReportDocx } = require('./reports/caseReportService');
+const { tenantFilter } = require('../utils/tenant');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -47,6 +47,7 @@ const toIdString = (value) => {
 
 const canAccessIncident = (incident, user) => {
     if (!incident || !user) return false;
+    if (String(incident.schoolId || '').toUpperCase() !== String(user.schoolId || '').toUpperCase()) return false;
     if (isAdministrationRole(user.role)) return true;
 
     const userId = toIdString(user.id || user._id);
@@ -86,16 +87,16 @@ const buildAlternationRegex = (values) => {
     return new RegExp(`^(${parts.join('|')})$`, 'i');
 };
 
-const findByNameSet = (Model, values) => {
+const findByNameSet = (Model, values, schoolId) => {
     const regex = buildAlternationRegex(values);
     if (!regex) return Promise.resolve([]);
-    return Model.find({ name: { $regex: regex } }).select('name').lean();
+    return Model.find({ schoolId, name: { $regex: regex } }).select('name').lean();
 };
 
-const findByFieldRegexSet = (Model, field, values) => {
+const findByFieldRegexSet = (Model, field, values, schoolId) => {
     const patterns = Array.from(values).map((value) => new RegExp(`^${escapeRegex(value)}$`, 'i'));
     if (patterns.length === 0) return Promise.resolve([]);
-    return Model.find({ [field]: { $in: patterns } }).lean();
+    return Model.find({ schoolId, [field]: { $in: patterns } }).lean();
 };
 
 const getPublicUploadPath = (file) => {
@@ -205,7 +206,7 @@ const buildIncidentDateRangeQuery = (startDateValue, endDateValue) => {
 };
 
 const buildIncidentQuery = async (user, query) => {
-    const baseConditions = [];
+    const baseConditions = [{ schoolId: user.schoolId }];
 
     if (user.role === 'Teacher') {
         baseConditions.push({ $or: [{ reportedBy: user.id }, { assignedHandler: user.id }] });
@@ -269,14 +270,14 @@ const buildIncidentQuery = async (user, query) => {
                 .map((e) => new mongoose.Types.ObjectId(e));
 
             const selectedAdminUsers = validStaffIds.length > 0
-                ? await User.find({ _id: { $in: validStaffIds }, role: { $in: ADMIN_ROLES } }).select('_id').lean()
+                ? await User.find({ schoolId: user.schoolId, _id: { $in: validStaffIds }, role: { $in: ADMIN_ROLES } }).select('_id').lean()
                 : [];
             const isAdminSelectedById = selectedAdminUsers.length > 0;
             const needsAdminUserIds = includeUnassigned || includeAdminRole || isAdminSelectedByKeyword || isAdminSelectedById;
 
             let allAdminIds = [];
             if (needsAdminUserIds) {
-                const adminUsers = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
+                const adminUsers = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } }).select('_id').lean();
                 allAdminIds = adminUsers.map((u) => u._id);
             }
 
@@ -307,7 +308,7 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
     ];
 
     const legacyStudents = missingAdmissionNos.length
-        ? await Student.find({ admissionNo: { $in: missingAdmissionNos } }).lean()
+        ? await Student.find({ schoolId: incidents[0]?.schoolId, admissionNo: { $in: missingAdmissionNos } }).lean()
         : [];
     const studentByAdmissionNo = new Map(legacyStudents.map((s) => [s.admissionNo, s]));
 
@@ -325,7 +326,7 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
             const student = studentByAdmissionNo.get(incidentObj.admissionNo);
             if (student) {
                 selfHealOps.push({
-                    updateOne: { filter: { _id: incidentObj._id }, update: { $set: { student: student._id } } },
+                    updateOne: { filter: { _id: incidentObj._id, schoolId: incidentObj.schoolId }, update: { $set: { student: student._id } } },
                 });
                 incidentObj.studentDetails = {
                     name: student.name,
@@ -358,7 +359,7 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
 const dispatchIncidentCreatedNotifications = async (incidents, user) => {
     const reporterId = user.id;
     const isAdmin = isAdministrationRole(user.role);
-    const admins = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
+    const admins = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } }).select('_id').lean();
 
     const allNotifications = [];
 
@@ -374,6 +375,7 @@ const dispatchIncidentCreatedNotifications = async (incidents, user) => {
         for (const admin of admins) {
             if (admin._id.toString() === reporterId.toString()) continue;
             allNotifications.push({
+                schoolId: user.schoolId,
                 recipient: admin._id,
                 type: 'INCIDENT_CREATED',
                 incident: incident._id,
@@ -395,6 +397,7 @@ const dispatchIncidentCreatedNotifications = async (incidents, user) => {
         const handlerId = incident.assignedHandler?._id || incident.assignedHandler;
         if (isAdmin && handlerId && handlerId.toString() !== reporterId.toString()) {
             allNotifications.push({
+                schoolId: user.schoolId,
                 recipient: handlerId,
                 type: 'INCIDENT_ASSIGNED',
                 incident: incident._id,
@@ -430,9 +433,9 @@ const createIncidents = async ({ body, files, user }) => {
 
     let studentDetails = [];
     if (isBulkSubmission) {
-        studentDetails = await Student.find({ _id: { $in: studentIds } }).lean();
+        studentDetails = await Student.find({ schoolId: user.schoolId, _id: { $in: studentIds } }).lean();
     } else if (body.admissionNo) {
-        const student = await Student.findOne({ admissionNo: body.admissionNo }).lean();
+        const student = await Student.findOne({ schoolId: user.schoolId, admissionNo: body.admissionNo }).lean();
         if (student) studentDetails = [student];
     }
 
@@ -472,6 +475,7 @@ const createIncidents = async ({ body, files, user }) => {
 
     for (const student of studentDetails) {
         incidentsToInsert.push({
+            schoolId: user.schoolId,
             ...incidentData,
             title: body.category,
             incidentCategory: body.category,
@@ -499,12 +503,12 @@ const createIncidents = async ({ body, files, user }) => {
         const inserted = await Incident.insertMany(incidentsToInsert);
         createdIncidents.push(...inserted);
 
-        await Log.create([{
-            actionName: useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
-            performedBy: user.id || null,
-            entityType: 'Incident',
-            entityId: createdIncidents[0]._id,
-            metadata: {
+        createLog(
+            useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
+            user.id || user._id,
+            'Incident',
+            createdIncidents[0]._id,
+            {
                 title: createdIncidents[0]?.title,
                 studentName: createdIncidents[0]?.studentsInvolved?.[0] || null,
                 class: createdIncidents[0]?.class || null,
@@ -514,7 +518,7 @@ const createIncidents = async ({ body, files, user }) => {
                 reportedBy: user.name,
                 isBulkSubmission,
             }
-        }]);
+        );
     }
 
     if (shouldGenerate) {
@@ -574,8 +578,8 @@ const listIncidents = async ({ user, query }) => {
     return { paginated: false, data: enhanced };
 };
 
-const getDistinctClasses = async () => {
-    const classes = await Incident.distinct('class');
+const getDistinctClasses = async (user) => {
+    const classes = await Incident.distinct('class', tenantFilter(user));
     const filtered = classes.filter(Boolean).sort((a, b) => {
         const aNum = parseInt(a);
         const bNum = parseInt(b);
@@ -585,8 +589,8 @@ const getDistinctClasses = async () => {
     return filtered.length > 0 ? filtered : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 };
 
-const getDistinctSections = async () => {
-    const sections = await Incident.distinct('section');
+const getDistinctSections = async (user) => {
+    const sections = await Incident.distinct('section', tenantFilter(user));
     const filtered = sections.filter(Boolean).sort();
     return filtered.length > 0 ? filtered : ['A', 'B', 'C', 'D', 'E'];
 };
@@ -617,7 +621,7 @@ const getIncidentById = async (id, user) => {
         throw err;
     }
 
-    const incident = await Incident.findById(id)
+    const incident = await Incident.findOne(tenantFilter(user, { _id: id }))
         .populate('reportedBy', 'name role')
         .populate('assignedHandler', 'name role')
         .populate('closedBy', 'name role')
@@ -642,9 +646,9 @@ const getIncidentById = async (id, user) => {
             section: incidentObj.student.section,
         };
     } else if (incidentObj.admissionNo) {
-        const student = await Student.findOne({ admissionNo: incidentObj.admissionNo }).lean();
+        const student = await Student.findOne(tenantFilter(user, { admissionNo: incidentObj.admissionNo })).lean();
         if (student) {
-            Incident.updateOne({ _id: incidentObj._id }, { $set: { student: student._id } }).exec().catch((err) => {
+            Incident.updateOne(tenantFilter(user, { _id: incidentObj._id }), { $set: { student: student._id } }).exec().catch((err) => {
                 logger.error('Incident student link update failed', {
                     incidentId: incidentObj._id,
                     error: err.message,
@@ -667,7 +671,7 @@ const getIncidentById = async (id, user) => {
 };
 
 const approveAndAssign = async (incidentId, handlerId, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -712,7 +716,7 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
 };
 
 const addProgressNote = async (incidentId, note, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -763,7 +767,7 @@ const addProgressNote = async (incidentId, note, user) => {
 };
 
 const requestClosure = async (incidentId, actionTaken, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -786,7 +790,7 @@ const requestClosure = async (incidentId, actionTaken, user) => {
 };
 
 const finalizeClosure = async (incidentId, note, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -815,7 +819,7 @@ const finalizeClosure = async (incidentId, note, user) => {
 };
 
 const rejectClosure = async (incidentId, reason, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -850,7 +854,7 @@ const rejectClosure = async (incidentId, reason, user) => {
 };
 
 const deleteIncident = async (incidentId, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -861,18 +865,19 @@ const deleteIncident = async (incidentId, user) => {
         operation: 'deleteIncident',
         incidentId,
         actorId: user?.id || user?._id,
+        schoolId: user?.schoolId,
     });
 
     const issuedLetters = await require('../models/IssuedLetter')
-        .find({ incident: incident._id })
+        .find(tenantFilter(user, { incident: incident._id }))
         .select('_id')
         .lean();
 
     for (const letter of issuedLetters) {
-        await deleteIssuedLetter(letter._id, user?.id || user?._id);
+        await deleteIssuedLetter(letter._id, user);
     }
 
-    await Incident.findByIdAndDelete(incidentId);
+    await Incident.findOneAndDelete(tenantFilter(user, { _id: incidentId }));
 
     createLog('Incident Deleted', user.id || user._id, 'Incident', incident._id, {
         title: incident.title, class: incident.class, students: incident.studentsInvolved,
@@ -882,7 +887,7 @@ const deleteIncident = async (incidentId, user) => {
 };
 
 const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {
-    const incident = await Incident.findById(incidentId);
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
         err.statusCode = 404;
@@ -963,10 +968,10 @@ const processExcelUpload = async (filePath, user, body) => {
 
     // Fetch only the relevant data
     const [categories, locations, evidenceTypes, students, users] = await Promise.all([
-        findByNameSet(Category, categorySet),
-        findByNameSet(Location, locationSet),
-        findByNameSet(EvidenceType, evidenceTypeSet),
-        findByFieldRegexSet(Student, 'admissionNo', admissionNoSet).then((rows) =>
+        findByNameSet(Category, categorySet, user.schoolId),
+        findByNameSet(Location, locationSet, user.schoolId),
+        findByNameSet(EvidenceType, evidenceTypeSet, user.schoolId),
+        findByFieldRegexSet(Student, 'admissionNo', admissionNoSet, user.schoolId).then((rows) =>
             rows.map((s) => ({
                 admissionNo: s.admissionNo,
                 name: s.name,
@@ -974,7 +979,7 @@ const processExcelUpload = async (filePath, user, body) => {
                 section: s.section,
             }))
         ),
-        findByFieldRegexSet(User, 'email', emailSet).then((rows) =>
+        findByFieldRegexSet(User, 'email', emailSet, user.schoolId).then((rows) =>
             rows.map((u) => ({ email: u.email, role: u.role, name: u.name }))
         ),
     ]);
@@ -1102,6 +1107,7 @@ const processExcelUpload = async (filePath, user, body) => {
         if (isNaN(incidentRegisterDate.getTime())) { addFieldError('date/time', 'invalid date/time combination'); continue; }
 
         incidents.push({
+            schoolId: user.schoolId,
             title: validCategory,
             category: validCategory,
             location: validLocation,
@@ -1198,10 +1204,11 @@ const processExcelUpload = async (filePath, user, body) => {
 
     // Notify admins via SSE
     try {
-        const admins = await User.find({ role: { $in: ADMIN_ROLES } }).select('_id').lean();
+        const admins = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } }).select('_id').lean();
         const notifications = admins
             .filter((a) => a._id.toString() !== user.id.toString())
             .map((a) => ({
+                schoolId: user.schoolId,
                 recipient: a._id,
                 type: 'INCIDENT_CREATED',
                 entityType: 'Bulk Upload',
@@ -1223,13 +1230,14 @@ const processExcelUpload = async (filePath, user, body) => {
     return { createdIncidents, lettersGenerated, lettersFailed, errors, validationResults };
 };
 
-const buildDownloadTemplate = async (format = 'xlsx') => {
+const buildDownloadTemplate = async (format = 'xlsx', user) => {
     const [categories, locations, evidenceTypes, students, users] = await Promise.all([
-        Category.find().select('name').sort({ name: 1 }).lean(),
-        Location.find().select('name').sort({ name: 1 }).lean(),
-        EvidenceType.find().select('name').sort({ name: 1 }).lean(),
-        Student.find().select('admissionNo name className section').limit(5).lean(),
+        Category.find(tenantFilter(user)).select('name').sort({ name: 1 }).lean(),
+        Location.find(tenantFilter(user)).select('name').sort({ name: 1 }).lean(),
+        EvidenceType.find(tenantFilter(user)).select('name').sort({ name: 1 }).lean(),
+        Student.find(tenantFilter(user)).select('admissionNo name className section').limit(5).lean(),
         User.find({
+            schoolId: user.schoolId,
             role: {
                 $in: [
                     'Super Admin',

@@ -6,7 +6,7 @@ const s3StorageService = require('../services/s3StorageService');
 
 const getIncidentCategories = async (req, res, next) => {
     try {
-        res.json(await letterTemplateService.getIncidentCategories());
+        res.json(await letterTemplateService.getIncidentCategories(req.user));
     } catch (error) {
         next(error);
     }
@@ -14,7 +14,7 @@ const getIncidentCategories = async (req, res, next) => {
 
 const getLetterTemplates = async (req, res, next) => {
     try {
-        res.json(await letterTemplateService.listLetterTemplates());
+        res.json(await letterTemplateService.listLetterTemplates(req.user));
     } catch (error) {
         next(error);
     }
@@ -22,7 +22,7 @@ const getLetterTemplates = async (req, res, next) => {
 
 const getLetterTemplateById = async (req, res, next) => {
     try {
-        res.json(await letterTemplateService.getLetterTemplateById(req.params.id));
+        res.json(await letterTemplateService.getLetterTemplateById(req.params.id, req.user));
     } catch (error) {
         next(error);
     }
@@ -30,7 +30,7 @@ const getLetterTemplateById = async (req, res, next) => {
 
 const getTemplateByCategory = async (req, res, next) => {
     try {
-        res.json(await letterTemplateService.getTemplateByCategory(req.params.category));
+        res.json(await letterTemplateService.getTemplateByCategory(req.params.category, req.user));
     } catch (error) {
         next(error);
     }
@@ -38,7 +38,7 @@ const getTemplateByCategory = async (req, res, next) => {
 
 const createLetterTemplate = async (req, res, next) => {
     try {
-        const template = await letterTemplateService.createLetterTemplate(req.body, req.user.id);
+        const template = await letterTemplateService.createLetterTemplate(req.body, req.user);
         res.status(201).json(template);
     } catch (error) {
         next(error);
@@ -47,7 +47,7 @@ const createLetterTemplate = async (req, res, next) => {
 
 const updateLetterTemplate = async (req, res, next) => {
     try {
-        const template = await letterTemplateService.updateLetterTemplate(req.params.id, req.body, req.user.id);
+        const template = await letterTemplateService.updateLetterTemplate(req.params.id, req.body, req.user);
         res.json(template);
     } catch (error) {
         next(error);
@@ -60,7 +60,7 @@ const uploadTemplateFileController = async (req, res, next) => {
             req.params.id,
             req.body.language || 'en',
             req.file,
-            req.user.id
+            req.user
         );
 
         res.json({
@@ -77,7 +77,7 @@ const deleteTemplateDocument = async (req, res, next) => {
         res.json(await letterTemplateService.removeTemplateVariant(
             req.params.id,
             req.query.lang || req.body?.lang || 'en',
-            req.user.id
+            req.user
         ));
     } catch (error) {
         next(error);
@@ -86,7 +86,7 @@ const deleteTemplateDocument = async (req, res, next) => {
 
 const deleteLetterTemplate = async (req, res, next) => {
     try {
-        res.json(await letterTemplateService.deleteLetterTemplate(req.params.id, req.user.id));
+        res.json(await letterTemplateService.deleteLetterTemplate(req.params.id, req.user));
     } catch (error) {
         next(error);
     }
@@ -96,7 +96,8 @@ const downloadTemplate = async (req, res, next) => {
     try {
         const { filePath, key, url, originalName } = await letterTemplateService.resolveTemplateDownloadPath(
             req.params.id,
-            req.query.lang || 'en'
+            req.query.lang || 'en',
+            req.user
         );
 
         if (key) {

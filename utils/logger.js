@@ -105,22 +105,23 @@ const resolveActorProfile = async (performedBy, notificationConfig = {}) => {
     }
 
     try {
-        const user = await User.findById(actorId).select('name role').lean();
+        const user = await User.findById(actorId).select('name role schoolId').lean();
         if (user) {
             return {
                 actorId,
                 performedByName: notificationConfig.performedByName || user.name,
                 performedByRole: notificationConfig.performedByRole || user.role || null,
+                schoolId: notificationConfig.schoolId || user.schoolId || null,
             };
         }
     } catch (err) {
         logger.warn('resolveActorProfile: user lookup failed', { actorId, error: err.message });
     }
 
-    return { actorId, performedByName: fallbackName, performedByRole: fallbackRole };
+    return { actorId, performedByName: fallbackName, performedByRole: fallbackRole, schoolId: notificationConfig.schoolId || null };
 };
 
-const resolveRecipientEntries = async (notificationConfig = {}, actorId = null) => {
+const resolveRecipientEntries = async (notificationConfig = {}, actorId = null, schoolId = null) => {
     const collectedEntries = [];
 
     if (Array.isArray(notificationConfig.recipientEntries)) {
@@ -136,7 +137,10 @@ const resolveRecipientEntries = async (notificationConfig = {}, actorId = null) 
         if (recipientRoles.has('Admin')) recipientRoles.add('Super Admin');
         if (recipientRoles.has('Super Admin')) recipientRoles.add('super_admin');
         if (recipientRoles.has('Teacher')) recipientRoles.add('teacher');
-        const users = await User.find({ role: { $in: Array.from(recipientRoles) } })
+        const users = await User.find({
+            role: { $in: Array.from(recipientRoles) },
+            ...(schoolId ? { schoolId } : {}),
+        })
             .select('_id')
             .lean();
         collectedEntries.push(...users.map((user) => ({ recipient: user._id })));
@@ -182,24 +186,28 @@ const createLog = (
         const normalizedEntityId = normalizeId(entityId);
 
         try {
+            const actorProfile = await resolveActorProfile(performedBy, notificationConfig || {});
+            const schoolId = metadata.schoolId || notificationConfig?.schoolId || actorProfile.schoolId;
+            if (!schoolId) {
+                logger.warn('Audit logging skipped because schoolId could not be resolved', { actionName, entityType });
+                return;
+            }
+
             await Log.create({
+                schoolId,
                 actionName,
                 performedBy: normalizedPerformedBy,
                 entityType,
                 entityId: normalizedEntityId,
                 metadata,
             });
-        } catch (err) {
-            logger.error('Audit logging failed', { actionName, entityType, error: err.message });
-        }
 
-        if (!notificationConfig) return;
+            if (!notificationConfig) return;
 
-        try {
-            const actorProfile = await resolveActorProfile(performedBy, notificationConfig);
             const recipientEntries = await resolveRecipientEntries(
                 notificationConfig,
-                actorProfile.actorId
+                actorProfile.actorId,
+                schoolId
             );
 
             if (recipientEntries.length === 0) return;
@@ -223,6 +231,7 @@ const createLog = (
                 const incidentId = entry.incidentId || defaultIncidentId;
 
                 return {
+                    schoolId,
                     recipient: entry.recipient,
                     type: entry.type || notificationConfig.type || 'SYSTEM_ACTIVITY',
                     incident: isObjectIdLike(incidentId) ? incidentId.toString() : null,
@@ -257,7 +266,7 @@ const createLog = (
                 await notificationService.insertAndPush(notificationDocuments);
             }
         } catch (err) {
-            logger.error('Notification dispatch failed', { actionName, entityType, error: err.message });
+            logger.error('Audit logging or notification dispatch failed', { actionName, entityType, error: err.message });
         }
     });
 };

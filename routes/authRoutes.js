@@ -19,6 +19,7 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
 const {
     registerSchema,
+    workspaceSchema,
     loginSchema,
     changeStudentPasswordSchema,
 } = require('../validators/authValidators');
@@ -29,7 +30,8 @@ router.get('/admin-exists', getAdminExists);
 router.get('/bootstrap-status', getAdminExists);
 router.get('/csrf', getCsrf);
 router.get('/csrf-token', getCsrf);
-router.post('/register', authSensitiveRateLimiter, validate(registerSchema), registerUser);
+router.post('/register', authSensitiveRateLimiter, validate(workspaceSchema), registerUser);
+router.post('/workspaces', authSensitiveRateLimiter, validate(workspaceSchema), registerUser);
 router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser);
 router.post('/refresh', refreshSession);
 router.post('/logout', logoutUser);

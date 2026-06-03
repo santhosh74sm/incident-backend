@@ -61,7 +61,7 @@ router.delete('/locations/:id', protect, authorize('Super Admin', 'Admin', 'Teac
 // ─── Distinct filters (static — must precede /:id) ───────────────────────────
 router.get('/classes', protect, async (req, res, next) => {
     try {
-        res.json(await incidentService.getDistinctClasses());
+        res.json(await incidentService.getDistinctClasses(req.user));
     } catch (err) {
         next(err);
     }
@@ -69,7 +69,7 @@ router.get('/classes', protect, async (req, res, next) => {
 
 router.get('/sections', protect, async (req, res, next) => {
     try {
-        res.json(await incidentService.getDistinctSections());
+        res.json(await incidentService.getDistinctSections(req.user));
     } catch (err) {
         next(err);
     }

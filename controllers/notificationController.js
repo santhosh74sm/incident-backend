@@ -33,7 +33,7 @@ const streamNotifications = async (req, res) => {
 
     // Send current notifications immediately on connect
     try {
-        const notifications = await notificationService.getMyNotifications(userId);
+        const notifications = await notificationService.getMyNotifications(userId, req.user.schoolId);
         res.write(`event: init\ndata: ${JSON.stringify(serializeValue(notifications))}\n\n`);
     } catch {
         res.write(`event: init\ndata: []\n\n`);
@@ -61,7 +61,7 @@ const streamNotifications = async (req, res) => {
 
 const getMyNotifications = async (req, res, next) => {
     try {
-        res.json(await notificationService.getMyNotifications(req.user.id));
+        res.json(await notificationService.getMyNotifications(req.user.id, req.user.schoolId));
     } catch (error) {
         next(error);
     }
@@ -69,7 +69,7 @@ const getMyNotifications = async (req, res, next) => {
 
 const getUnreadCount = async (req, res, next) => {
     try {
-        res.json(await notificationService.getUnreadCount(req.user.id));
+        res.json(await notificationService.getUnreadCount(req.user.id, req.user.schoolId));
     } catch (error) {
         next(error);
     }
@@ -80,11 +80,12 @@ const markAsRead = async (req, res, next) => {
         const result = await notificationService.markAsRead({
             notificationId: req.params.id,
             userId: req.user.id,
+            schoolId: req.user.schoolId,
         });
 
         // Push updated list to all this user's SSE connections
         notificationService
-            .getMyNotifications(req.user.id)
+            .getMyNotifications(req.user.id, req.user.schoolId)
             .then((notifications) => sseManager.sendToUser(String(req.user._id || req.user.id), 'notifications', notifications))
             .catch((err) => {
                 logger.error('SSE notification refresh failed', { error: err.message });
@@ -101,10 +102,11 @@ const markAsReadByIncident = async (req, res, next) => {
         const result = await notificationService.markAsReadByIncident({
             incidentId: req.params.incidentId,
             userId: req.user.id,
+            schoolId: req.user.schoolId,
         });
 
         notificationService
-            .getMyNotifications(req.user.id)
+            .getMyNotifications(req.user.id, req.user.schoolId)
             .then((notifications) => sseManager.sendToUser(String(req.user._id || req.user.id), 'notifications', notifications))
             .catch((err) => {
                 logger.error('SSE notification refresh failed', { error: err.message });
@@ -118,10 +120,10 @@ const markAsReadByIncident = async (req, res, next) => {
 
 const markAllAsRead = async (req, res, next) => {
     try {
-        const result = await notificationService.markAllAsRead(req.user.id);
+        const result = await notificationService.markAllAsRead(req.user.id, req.user.schoolId);
 
         notificationService
-            .getMyNotifications(req.user.id)
+            .getMyNotifications(req.user.id, req.user.schoolId)
             .then((notifications) => sseManager.sendToUser(String(req.user._id || req.user.id), 'notifications', notifications))
             .catch((err) => {
                 logger.error('SSE notification refresh failed', { error: err.message });
@@ -138,10 +140,11 @@ const deleteNotification = async (req, res, next) => {
         const result = await notificationService.deleteNotification({
             notificationId: req.params.id,
             userId: req.user.id,
+            schoolId: req.user.schoolId,
         });
 
         notificationService
-            .getMyNotifications(req.user.id)
+            .getMyNotifications(req.user.id, req.user.schoolId)
             .then((notifications) => sseManager.sendToUser(String(req.user._id || req.user.id), 'notifications', notifications))
             .catch((err) => {
                 logger.error('SSE notification refresh failed', { error: err.message });
@@ -155,7 +158,7 @@ const deleteNotification = async (req, res, next) => {
 
 const deleteAllNotifications = async (req, res, next) => {
     try {
-        const result = await notificationService.deleteAllNotifications(req.user.id);
+        const result = await notificationService.deleteAllNotifications(req.user.id, req.user.schoolId);
         sseManager.sendToUser(String(req.user._id || req.user.id), 'notifications', []);
         res.json(result);
     } catch (error) {

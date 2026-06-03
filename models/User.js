@@ -17,6 +17,15 @@ const userSchema = new mongoose.Schema(
             trim: true,
         },
 
+        schoolId: {
+            type: String,
+            required: true,
+            immutable: true,
+            uppercase: true,
+            trim: true,
+            index: true,
+        },
+
         password: {
             type: String,
             required: true,
@@ -52,6 +61,9 @@ const userSchema = new mongoose.Schema(
     },
     { timestamps: true }
 );
+
+userSchema.index({ schoolId: 1, role: 1 });
+userSchema.index({ schoolId: 1, email: 1 });
 
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return bcrypt.compare(enteredPassword, this.password);

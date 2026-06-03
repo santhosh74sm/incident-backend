@@ -2,6 +2,14 @@ const mongoose = require('mongoose');
 
 const incidentSchema = new mongoose.Schema(
     {
+        schoolId: {
+            type: String,
+            required: true,
+            immutable: true,
+            uppercase: true,
+            trim: true,
+            index: true,
+        },
         title: { type: String, required: true },
         description: { type: String },
         evidence: [
@@ -64,16 +72,16 @@ const incidentSchema = new mongoose.Schema(
 );
 
 // Compound indexes for the most common query patterns
-incidentSchema.index({ isHighPriority: 1, status: 1 });
-incidentSchema.index({ admissionNo: 1, status: 1 });
-incidentSchema.index({ student: 1, status: 1 });
-incidentSchema.index({ reportedBy: 1, createdAt: -1 });
-incidentSchema.index({ class: 1, section: 1 });
-incidentSchema.index({ status: 1, createdAt: -1 });
-incidentSchema.index({ assignedHandler: 1, status: 1 });
-incidentSchema.index({ approvalStatus: 1, createdAt: -1 });
-incidentSchema.index({ incidentDate: -1, createdAt: -1 });
-incidentSchema.index({ category: 1, status: 1 });
-incidentSchema.index({ location: 1 });
+incidentSchema.index({ schoolId: 1, isHighPriority: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, admissionNo: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, student: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, reportedBy: 1, createdAt: -1 });
+incidentSchema.index({ schoolId: 1, class: 1, section: 1 });
+incidentSchema.index({ schoolId: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ schoolId: 1, assignedHandler: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, approvalStatus: 1, createdAt: -1 });
+incidentSchema.index({ schoolId: 1, incidentDate: -1, createdAt: -1 });
+incidentSchema.index({ schoolId: 1, category: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, location: 1 });
 
 module.exports = mongoose.model('Incident', incidentSchema);

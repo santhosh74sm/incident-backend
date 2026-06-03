@@ -100,7 +100,9 @@ const getIncidentReportExportKeys = async (incidentIds, context = {}) => {
     const keys = [];
 
     for (const incidentId of ids.filter(Boolean)) {
-        const prefix = `exports/reports/${incidentId}/`;
+        const prefix = context.schoolId
+            ? `schools/${context.schoolId}/exports/reports/${incidentId}/`
+            : `exports/reports/${incidentId}/`;
         try {
             keys.push(...await s3StorageService.listKeysByPrefix(prefix));
         } catch (error) {

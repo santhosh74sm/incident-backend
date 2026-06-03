@@ -1,6 +1,14 @@
 const mongoose = require('mongoose');
 
 const fieldOperationOptionSchema = new mongoose.Schema({
+    schoolId: {
+        type: String,
+        required: true,
+        immutable: true,
+        uppercase: true,
+        trim: true,
+        index: true
+    },
     label: { 
         type: String, 
         required: true,
@@ -22,6 +30,7 @@ const fieldOperationOptionSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-fieldOperationOptionSchema.index({ type: 1, order: 1 });
+fieldOperationOptionSchema.index({ schoolId: 1, type: 1, order: 1 });
+fieldOperationOptionSchema.index({ schoolId: 1, type: 1, label: 1 }, { unique: true });
 
 module.exports = mongoose.model('FieldOperationOption', fieldOperationOptionSchema);

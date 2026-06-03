@@ -19,7 +19,7 @@ const getIssuedLetters = async (req, res, next) => {
             req.query.className = req.query.class;
         }
 
-        const result = await issuedLetterService.listIssuedLetters(req.query);
+        const result = await issuedLetterService.listIssuedLetters(req.query, req.user);
 
         if (result.paginated) {
             return res.json({ data: result.data, pagination: result.pagination });
@@ -37,7 +37,7 @@ const getIssuedLetters = async (req, res, next) => {
 
 const getIssuedLetterById = async (req, res, next) => {
     try {
-        const letter = await issuedLetterService.getIssuedLetterById(req.params.id);
+        const letter = await issuedLetterService.getIssuedLetterById(req.params.id, req.user);
         res.json(letter);
     } catch (error) {
         next(error);
@@ -96,7 +96,7 @@ const createIssuedLetterFromIncident = async (req, res, next) => {
             return res.status(400).json({ message: 'Incident ID is required to generate a letter.' });
         }
 
-        const { alreadyExists, letter } = await issuedLetterService.generateLetterFromIncident(incidentId, language, req.user.id);
+        const { alreadyExists, letter } = await issuedLetterService.generateLetterFromIncident(incidentId, language, req.user);
 
         if (alreadyExists) {
             return res.status(200).json({ message: 'Letter already generated for this incident.', letter });
@@ -114,7 +114,7 @@ const createIssuedLetterFromIncident = async (req, res, next) => {
 
 const updateIssuedLetter = async (req, res, next) => {
     try {
-        const letter = await issuedLetterService.updateIssuedLetter(req.params.id, req.body, req.user.id);
+        const letter = await issuedLetterService.updateIssuedLetter(req.params.id, req.body, req.user);
         res.json(letter);
     } catch (error) {
         next(error);
@@ -127,7 +127,7 @@ const updateIssuedLetter = async (req, res, next) => {
 
 const deleteIssuedLetter = async (req, res, next) => {
     try {
-        const result = await issuedLetterService.deleteIssuedLetter(req.params.id, req.user.id);
+        const result = await issuedLetterService.deleteIssuedLetter(req.params.id, req.user);
         res.json(result);
     } catch (error) {
         next(error);
@@ -140,7 +140,7 @@ const deleteIssuedLetter = async (req, res, next) => {
 
 const getFilters = async (req, res, next) => {
     try {
-        const filters = await issuedLetterService.getLetterFilterOptions();
+        const filters = await issuedLetterService.getLetterFilterOptions(req.user);
         res.json(filters);
     } catch (error) {
         next(error);
@@ -153,7 +153,7 @@ const getFilters = async (req, res, next) => {
 
 const downloadIssuedLetter = async (req, res, next) => {
     try {
-        const { buffer, filename, url } = await issuedLetterService.getLetterDocxDownload(req.params.id);
+        const { buffer, filename, url } = await issuedLetterService.getLetterDocxDownload(req.params.id, req.user);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         if (url) res.setHeader('X-S3-File-Url', url);

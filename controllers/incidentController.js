@@ -233,7 +233,7 @@ const uploadIncidents = async (req, res, next) => {
 const downloadTemplate = async (req, res, next) => {
     try {
         const format = req.query.format || 'xlsx';
-        const result = await incidentService.buildDownloadTemplate(format);
+        const result = await incidentService.buildDownloadTemplate(format, req.user);
 
         if (result.format === 'csv') {
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');

@@ -10,6 +10,7 @@ const AppError = require('../utils/AppError');
 const studentService = require('./studentService');
 const incidentService = require('./incidentService');
 const issuedLetterService = require('./issuedLetterService');
+const { tenantFilter } = require('../utils/tenant');
 
 const MODULES = new Set(['students', 'incidents', 'issued-letters']);
 const MODES = new Set(['filtered', 'all']);
@@ -30,16 +31,16 @@ const normalizeIds = (ids = []) =>
         .map((id) => String(id || '').trim())
         .filter(isObjectId))];
 
-const buildScopeQuery = (moduleName, payload = {}) => {
+const buildScopeQuery = (moduleName, payload = {}, actor) => {
     const mode = payload.mode || 'filtered';
     if (!MODES.has(mode)) throw new AppError('Invalid bulk delete mode.', 400);
-    if (mode === 'all') return {};
+    if (mode === 'all') return tenantFilter(actor);
 
     const ids = normalizeIds(payload.ids);
     if (ids.length === 0) {
         throw new AppError('Delete Filtered requires at least one record in scope.', 400);
     }
-    return { _id: { $in: ids } };
+    return tenantFilter(actor, { _id: { $in: ids } });
 };
 
 const getModel = (moduleName) => {
@@ -49,10 +50,10 @@ const getModel = (moduleName) => {
     throw new AppError('Invalid bulk delete module.', 400);
 };
 
-const getScopedIds = async (moduleName, payload) => {
+const getScopedIds = async (moduleName, payload, actor) => {
     if (!MODULES.has(moduleName)) throw new AppError('Invalid bulk delete module.', 400);
     const Model = getModel(moduleName);
-    const query = buildScopeQuery(moduleName, payload);
+    const query = buildScopeQuery(moduleName, payload, actor);
     return Model.find(query).select('_id').sort({ _id: 1 }).lean();
 };
 
@@ -62,15 +63,16 @@ const summarizeIncidents = (incidents = []) => ({
         count + (incident.evidence || []).filter((item) => item?.fileUrl).length, 0),
 });
 
-const previewStudents = async (payload) => {
-    const studentIds = (await getScopedIds('students', payload)).map((student) => student._id);
+const previewStudents = async (payload, actor) => {
+    const studentIds = (await getScopedIds('students', payload, actor)).map((student) => student._id);
     const students = studentIds.length
-        ? await Student.find({ _id: { $in: studentIds } }).select('admissionNo name').lean()
+        ? await Student.find(tenantFilter(actor, { _id: { $in: studentIds } })).select('admissionNo name').lean()
         : [];
 
     const admissionNos = students.map((student) => student.admissionNo).filter(Boolean);
     const names = students.map((student) => student.name).filter(Boolean);
     const relatedIncidents = await Incident.find({
+        schoolId: actor.schoolId,
         $or: [
             { student: { $in: studentIds } },
             { admissionNo: { $in: admissionNos } },
@@ -79,6 +81,7 @@ const previewStudents = async (payload) => {
     }).select('_id evidence').lean();
     const incidentIds = relatedIncidents.map((incident) => incident._id);
     const issuedLetterCount = await IssuedLetter.countDocuments({
+        schoolId: actor.schoolId,
         $or: [
             { admissionNo: { $in: admissionNos } },
             { incident: { $in: incidentIds } },
@@ -99,12 +102,12 @@ const previewStudents = async (payload) => {
     };
 };
 
-const previewIncidents = async (payload) => {
-    const incidentIds = (await getScopedIds('incidents', payload)).map((incident) => incident._id);
+const previewIncidents = async (payload, actor) => {
+    const incidentIds = (await getScopedIds('incidents', payload, actor)).map((incident) => incident._id);
     const incidents = incidentIds.length
-        ? await Incident.find({ _id: { $in: incidentIds } }).select('_id evidence').lean()
+        ? await Incident.find(tenantFilter(actor, { _id: { $in: incidentIds } })).select('_id evidence').lean()
         : [];
-    const issuedLetterCount = await IssuedLetter.countDocuments({ incident: { $in: incidentIds } });
+    const issuedLetterCount = await IssuedLetter.countDocuments(tenantFilter(actor, { incident: { $in: incidentIds } }));
     const incidentSummary = summarizeIncidents(incidents);
 
     return {
@@ -119,8 +122,8 @@ const previewIncidents = async (payload) => {
     };
 };
 
-const previewIssuedLetters = async (payload) => {
-    const letters = await getScopedIds('issued-letters', payload);
+const previewIssuedLetters = async (payload, actor) => {
+    const letters = await getScopedIds('issued-letters', payload, actor);
     return {
         module: 'issued-letters',
         mode: payload.mode,
@@ -133,9 +136,9 @@ const previewIssuedLetters = async (payload) => {
 
 const previewBulkDelete = async ({ moduleName, payload, actor }) => {
     ensureSuperAdmin(actor);
-    if (moduleName === 'students') return previewStudents(payload);
-    if (moduleName === 'incidents') return previewIncidents(payload);
-    if (moduleName === 'issued-letters') return previewIssuedLetters(payload);
+    if (moduleName === 'students') return previewStudents(payload, actor);
+    if (moduleName === 'incidents') return previewIncidents(payload, actor);
+    if (moduleName === 'issued-letters') return previewIssuedLetters(payload, actor);
     throw new AppError('Invalid bulk delete module.', 400);
 };
 
@@ -147,7 +150,7 @@ const deleteOne = async (moduleName, id, actor) => {
         return incidentService.deleteIncident(id, actor);
     }
     if (moduleName === 'issued-letters') {
-        return issuedLetterService.deleteIssuedLetter(id, getActorId(actor));
+        return issuedLetterService.deleteIssuedLetter(id, actor);
     }
     throw new AppError('Invalid bulk delete module.', 400);
 };
@@ -162,7 +165,7 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
         throw new AppError(`Type ${requiredPhrase} to confirm this bulk deletion.`, 400);
     }
 
-    const ids = (await getScopedIds(moduleName, payload)).map((record) => String(record._id));
+    const ids = (await getScopedIds(moduleName, payload, actor)).map((record) => String(record._id));
     const failures = [];
     const progress = [];
     let deleted = 0;
@@ -193,6 +196,7 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
 
     const durationMs = Date.now() - startedAt;
     const log = await BulkDeleteLog.create({
+        schoolId: actor.schoolId,
         user: getActorId(actor),
         module: moduleName,
         mode,

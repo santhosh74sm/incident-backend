@@ -11,8 +11,7 @@ const validate = require('../middleware/validate.middleware');
 const { evidenceTypeSchema } = require('../validators/optionValidators');
 const { objectIdParamSchema } = require('../validators/commonValidators');
 
-// Public route for getting evidence types (for dropdown)
-router.get('/', getEvidenceTypes);
+router.get('/', protect, getEvidenceTypes);
 
 // Admin and Teacher routes
 router.post('/', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(evidenceTypeSchema), addEvidenceType);

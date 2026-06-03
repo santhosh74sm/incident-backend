@@ -30,9 +30,8 @@ const getAdminExists = async (req, res, next) => {
 
 const registerUser = async (req, res, next) => {
     try {
-        const result = await authService.registerUser({
+        const result = await authService.createWorkspace({
             input: req.body,
-            actor: null,
         });
 
         setSessionCookies(res, await sessionService.issueSession({

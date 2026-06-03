@@ -110,7 +110,7 @@ const buildLogEnrichmentStages = () => [
     },
 ];
 
-const getLogs = async (query = {}) => {
+const getLogs = async (query = {}, actor = null) => {
     const { page, limit, skip } = getPagination(query, {
         defaultLimit: DEFAULT_LIMIT,
         maxLimit: MAX_LIMIT,
@@ -120,7 +120,7 @@ const getLogs = async (query = {}) => {
     const entityTypes = rawEntityType.split(',').map((value) => value.trim()).filter(Boolean);
     const createdAtRange = buildDateRange(query.startDate, query.endDate);
 
-    const baseMatch = {};
+    const baseMatch = { schoolId: actor?.schoolId };
     if (entityTypes.length > 0) baseMatch.entityType = { $in: entityTypes };
     if (createdAtRange) baseMatch.createdAt = createdAtRange;
 
@@ -161,7 +161,7 @@ const getLogs = async (query = {}) => {
 
     const [result, entityTypeOptions] = await Promise.all([
         Log.aggregate(pipeline).allowDiskUse(false),
-        Log.distinct('entityType'),
+        Log.distinct('entityType', { schoolId: actor?.schoolId }),
     ]);
 
     const logs = result?.[0]?.data || [];
@@ -176,7 +176,7 @@ const getLogs = async (query = {}) => {
     };
 };
 
-const getNotificationFeed = async ({ limit: rawLimit, role }) => {
+const getNotificationFeed = async ({ limit: rawLimit, role, actor }) => {
     const limit = Math.min(normalizePositiveNumber(rawLimit, DEFAULT_NOTIFICATION_LIMIT), MAX_NOTIFICATION_LIMIT);
     const allowedEntityTypes = NOTIFICATION_ENTITY_TYPES[role] || NOTIFICATION_ENTITY_TYPES.Teacher;
 
@@ -185,6 +185,7 @@ const getNotificationFeed = async ({ limit: rawLimit, role }) => {
             $match: {
                 entityType: { $in: allowedEntityTypes },
                 actionName: { $not: /login/i },
+                schoolId: actor?.schoolId,
             },
         },
         ...buildLogEnrichmentStages(),
@@ -199,8 +200,8 @@ const getNotificationFeed = async ({ limit: rawLimit, role }) => {
     };
 };
 
-const clearLogs = async () => {
-    await Log.deleteMany({});
+const clearLogs = async (actor) => {
+    await Log.deleteMany({ schoolId: actor?.schoolId });
     return { message: 'Activity history cleared.' };
 };
 

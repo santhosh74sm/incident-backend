@@ -14,6 +14,7 @@ const Category = require('../models/Category');
 const { createLog } = require('../utils/logger');
 const s3StorageService = require('./s3StorageService');
 const { deleteS3ObjectOrThrow } = require('./s3CleanupService');
+const { tenantFilter, schoolScopedKey } = require('../utils/tenant');
 
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -29,27 +30,27 @@ const appendDocxAvailabilityFlags = (templateObj) => ({
 // Read operations
 // ─────────────────────────────────────────────────────────────────────────────
 
-const getIncidentCategories = async () => {
-    const categories = await Category.distinct('name');
+const getIncidentCategories = async (user) => {
+    const categories = await Category.distinct('name', tenantFilter(user));
     return categories.sort((a, b) => a.localeCompare(b));
 };
 
-const listLetterTemplates = async () => {
-    const templates = await LetterTemplate.find({ isActive: true })
+const listLetterTemplates = async (user) => {
+    const templates = await LetterTemplate.find(tenantFilter(user, { isActive: true }))
         .populate('createdBy', 'name')
         .sort({ createdAt: -1 })
         .lean();
     return templates.map((t) => appendDocxAvailabilityFlags(t));
 };
 
-const getLetterTemplateById = async (id) => {
+const getLetterTemplateById = async (id, user) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
         const err = new Error('Invalid template ID');
         err.statusCode = 400;
         throw err;
     }
 
-    const template = await LetterTemplate.findById(id).populate('createdBy', 'name').lean();
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: id })).populate('createdBy', 'name').lean();
     if (!template) {
         const err = new Error('Template not found');
         err.statusCode = 404;
@@ -59,7 +60,7 @@ const getLetterTemplateById = async (id) => {
     return appendDocxAvailabilityFlags(template);
 };
 
-const getTemplateByCategory = async (category) => {
+const getTemplateByCategory = async (category, user) => {
     if (!category) {
         const err = new Error('Category parameter is required');
         err.statusCode = 400;
@@ -68,6 +69,7 @@ const getTemplateByCategory = async (category) => {
 
     const decoded = decodeURIComponent(category).trim();
     const template = await LetterTemplate.findOne({
+        schoolId: user.schoolId,
         incidentCategory: { $regex: new RegExp(`^${escapeRegex(decoded)}$`, 'i') },
         isActive: true,
     }).populate('createdBy', 'name').lean();
@@ -109,7 +111,7 @@ const getTemplateByCategory = async (category) => {
 // Write operations
 // ─────────────────────────────────────────────────────────────────────────────
 
-const createLetterTemplate = async ({ title, incidentCategory, description }, userId) => {
+const createLetterTemplate = async ({ title, incidentCategory, description }, user) => {
     if (!title?.trim()) {
         const err = new Error('Template title is required');
         err.statusCode = 400;
@@ -121,7 +123,7 @@ const createLetterTemplate = async ({ title, incidentCategory, description }, us
         throw err;
     }
 
-    const existing = await LetterTemplate.findOne({ incidentCategory: incidentCategory.trim() });
+    const existing = await LetterTemplate.findOne(tenantFilter(user, { incidentCategory: incidentCategory.trim() }));
     if (existing) {
         const err = new Error(
             'A template has already been created for this category. Please edit the existing one or choose a different category.'
@@ -131,16 +133,17 @@ const createLetterTemplate = async ({ title, incidentCategory, description }, us
     }
 
     const template = new LetterTemplate({
+        schoolId: user.schoolId,
         title: title.trim(),
         incidentCategory: incidentCategory.trim(),
         description: description || '',
-        createdBy: userId,
+        createdBy: user.id || user._id,
         isActive: true,
     });
 
     await template.save();
 
-    createLog('TEMPLATE_CREATED', userId, 'Template', template._id, {
+    createLog('TEMPLATE_CREATED', user.id || user._id, 'Template', template._id, {
         Title: template.title,
         Category: template.incidentCategory,
     });
@@ -148,8 +151,8 @@ const createLetterTemplate = async ({ title, incidentCategory, description }, us
     return template;
 };
 
-const updateLetterTemplate = async (id, { title, incidentCategory, description }, userId) => {
-    const template = await LetterTemplate.findById(id);
+const updateLetterTemplate = async (id, { title, incidentCategory, description }, user) => {
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: id }));
     if (!template) {
         const err = new Error('Template not found');
         err.statusCode = 404;
@@ -169,6 +172,7 @@ const updateLetterTemplate = async (id, { title, incidentCategory, description }
 
     if (template.incidentCategory !== incidentCategory.trim()) {
         const conflict = await LetterTemplate.findOne({
+            schoolId: user.schoolId,
             incidentCategory: incidentCategory.trim(),
             _id: { $ne: id },
         });
@@ -187,12 +191,12 @@ const updateLetterTemplate = async (id, { title, incidentCategory, description }
 
     await template.save();
 
-    createLog('TEMPLATE_UPDATED', userId, 'Template', template._id, { Title: template.title });
+    createLog('TEMPLATE_UPDATED', user.id || user._id, 'Template', template._id, { Title: template.title });
 
     return template;
 };
 
-const attachTemplateFile = async (templateId, language, uploadedFile, userId) => {
+const attachTemplateFile = async (templateId, language, uploadedFile, user) => {
     if (!uploadedFile) {
         const err = new Error('No file uploaded. Please select a .docx file.');
         err.statusCode = 400;
@@ -213,7 +217,7 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
         throw err;
     }
 
-    const template = await LetterTemplate.findById(templateId);
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: templateId }));
     if (!template) {
         if (uploadedFile.key) {
             await deleteS3ObjectOrThrow(uploadedFile.key, {
@@ -247,7 +251,7 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     const uploadResult = uploadedFile.buffer
         ? await s3StorageService.uploadBuffer({
             buffer: uploadedFile.buffer,
-            key: `letter-templates/${template._id}/${newFilename}`,
+            key: schoolScopedKey(user.schoolId, 'templates', `${template._id}/${newFilename}`),
             filename: newFilename,
             contentType: uploadedFile.mimetype,
         })
@@ -269,7 +273,7 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
 
     await template.save();
 
-    createLog('TEMPLATE_UPLOADED', userId, 'Template', template._id, {
+    createLog('TEMPLATE_UPLOADED', user.id || user._id, 'Template', template._id, {
         Title: template.title,
         Language: language,
         Filename: newFilename,
@@ -278,8 +282,8 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     return appendDocxAvailabilityFlags(template.toObject());
 };
 
-const removeTemplateVariant = async (templateId, lang, userId) => {
-    const template = await LetterTemplate.findById(templateId);
+const removeTemplateVariant = async (templateId, lang, user) => {
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: templateId }));
     if (!template) {
         const err = new Error('Template not found');
         err.statusCode = 404;
@@ -305,7 +309,7 @@ const removeTemplateVariant = async (templateId, lang, userId) => {
 
     await template.save();
 
-    createLog('TEMPLATE_VARIANT_DELETED', userId, 'Template', template._id, {
+    createLog('TEMPLATE_VARIANT_DELETED', user.id || user._id, 'Template', template._id, {
         Title: template.title,
         Variant: lang,
     });
@@ -313,8 +317,8 @@ const removeTemplateVariant = async (templateId, lang, userId) => {
     return { message: 'Template variant removed' };
 };
 
-const deleteLetterTemplate = async (templateId, userId) => {
-    const template = await LetterTemplate.findById(templateId);
+const deleteLetterTemplate = async (templateId, user) => {
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: templateId }));
     if (!template) {
         const err = new Error('Template not found');
         err.statusCode = 404;
@@ -334,9 +338,9 @@ const deleteLetterTemplate = async (templateId, userId) => {
         }
     }
 
-    await LetterTemplate.findByIdAndDelete(templateId);
+    await LetterTemplate.findOneAndDelete(tenantFilter(user, { _id: templateId }));
 
-    createLog('TEMPLATE_DELETED', userId, 'Template', template._id, {
+    createLog('TEMPLATE_DELETED', user.id || user._id, 'Template', template._id, {
         Title: template.title,
         Category: template.incidentCategory,
     });
@@ -348,8 +352,8 @@ const deleteLetterTemplate = async (templateId, userId) => {
 // Download operations
 // ─────────────────────────────────────────────────────────────────────────────
 
-const resolveTemplateDownloadPath = async (templateId, lang) => {
-    const template = await LetterTemplate.findById(templateId);
+const resolveTemplateDownloadPath = async (templateId, lang, user) => {
+    const template = await LetterTemplate.findOne(tenantFilter(user, { _id: templateId }));
     if (!template) {
         const err = new Error('Template not found');
         err.statusCode = 404;

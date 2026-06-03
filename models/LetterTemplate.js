@@ -6,11 +6,18 @@ const letterTemplateSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    schoolId: {
+        type: String,
+        required: true,
+        immutable: true,
+        uppercase: true,
+        trim: true,
+        index: true,
+    },
     incidentCategory: { 
         type: String, 
         required: true,
         trim: true,
-        unique: true,
         index: true
     },
     description: { 
@@ -58,7 +65,8 @@ const letterTemplateSchema = new mongoose.Schema({
     collection: 'letter_templates'
 });
 
-letterTemplateSchema.index({ title: 1, incidentCategory: 1 }, { unique: true });
+letterTemplateSchema.index({ schoolId: 1, incidentCategory: 1 }, { unique: true });
+letterTemplateSchema.index({ schoolId: 1, title: 1, incidentCategory: 1 }, { unique: true });
 
 letterTemplateSchema.methods.hasFile = function(lang = 'en') {
     if (lang === 'en') {
