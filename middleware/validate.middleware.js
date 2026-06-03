@@ -1,7 +1,7 @@
 const logger = require('../utils/pinoLogger');
-const s3StorageService = require('../services/s3StorageService');
+const { deleteS3ObjectsOrThrow } = require('../services/s3CleanupService');
 
-const validate = (schema, source = 'body') => (req, res, next) => {
+const validate = (schema, source = 'body') => async (req, res, next) => {
     const result = schema.safeParse(req[source]);
 
     if (!result.success) {
@@ -13,10 +13,18 @@ const validate = (schema, source = 'body') => (req, res, next) => {
                     ? [req.file]
                     : [];
 
+        const s3Keys = files.map((file) => file?.key).filter(Boolean);
+        try {
+            await deleteS3ObjectsOrThrow(s3Keys, {
+                operation: 'requestValidationFailed',
+                source,
+                path: req.path,
+            });
+        } catch (cleanupError) {
+            return next(cleanupError);
+        }
+
         files.forEach((file) => {
-            if (file?.key) {
-                s3StorageService.deleteObject(file.key).catch(() => {});
-            }
             if (file?.path) {
                 require('fs').unlink(file.path, () => {});
             }

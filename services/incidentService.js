@@ -24,7 +24,9 @@ const { autoGenerateLetterFromIncident } = require('./issuedLetterService');
 const notificationService = require('./notificationService');
 const { letterQueue, bulkQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
-const s3StorageService = require('./s3StorageService');
+const {
+    deleteIncidentFilesFromS3OrThrow,
+} = require('./s3CleanupService');
 const { buildCaseReportDocx } = require('./reports/caseReportService');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,30 +108,6 @@ const trimProgressLogsBeforePush = (incident) => {
     if (incident.progressLogs.length >= MAX_PROGRESS_LOGS) {
         incident.progressLogs.shift();
     }
-};
-
-const extractS3KeyFromProtectedUrl = (fileUrl) => {
-    const marker = '/s3/';
-    const value = String(fileUrl || '');
-    const markerIndex = value.indexOf(marker);
-    if (markerIndex === -1) return '';
-
-    const key = value.slice(markerIndex + marker.length).split('?')[0].split('#')[0];
-    try {
-        return decodeURIComponent(key);
-    } catch {
-        return key;
-    }
-};
-
-const deleteIncidentEvidenceFromS3 = async (incident) => {
-    const keys = (incident.evidence || [])
-        .map((entry) => extractS3KeyFromProtectedUrl(entry?.fileUrl))
-        .filter(Boolean);
-
-    if (keys.length === 0) return;
-
-    await Promise.allSettled(keys.map((key) => s3StorageService.deleteObject(key)));
 };
 
 const buildEvidenceEntriesFromUploads = (files = [], evidenceDataList = []) =>
@@ -879,7 +857,11 @@ const deleteIncident = async (incidentId, user) => {
         throw err;
     }
 
-    await deleteIncidentEvidenceFromS3(incident);
+    await deleteIncidentFilesFromS3OrThrow(incident, {
+        operation: 'deleteIncident',
+        incidentId,
+        actorId: user?.id || user?._id,
+    });
 
     await Incident.findByIdAndDelete(incidentId);
 
@@ -1265,13 +1247,7 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
             }).join(',')
         ).join('\n');
         const content = '\ufeff' + csvContent;
-        const upload = await s3StorageService.uploadBuffer({
-            buffer: Buffer.from(content, 'utf8'),
-            key: 'exports/templates/incident_upload_template.csv',
-            filename: 'incident_upload_template.csv',
-            contentType: 'text/csv; charset=utf-8',
-        });
-        return { format: 'csv', content, url: upload.url, key: upload.key };
+        return { format: 'csv', content };
     }
 
     const wb = XLSX.utils.book_new();
@@ -1294,13 +1270,7 @@ const buildDownloadTemplate = async (format = 'xlsx') => {
 
     XLSX.utils.book_append_sheet(wb, ws, 'Incident Upload Template');
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    const upload = await s3StorageService.uploadBuffer({
-        buffer,
-        key: 'exports/templates/incident_upload_template.xlsx',
-        filename: 'incident_upload_template.xlsx',
-        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    return { format: 'xlsx', buffer, url: upload.url, key: upload.key };
+    return { format: 'xlsx', buffer };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -12,8 +12,8 @@ const mongoose = require('mongoose');
 const LetterTemplate = require('../models/LetterTemplate');
 const Category = require('../models/Category');
 const { createLog } = require('../utils/logger');
-const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
+const { deleteS3ObjectOrThrow } = require('./s3CleanupService');
 
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -201,7 +201,11 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
 
     if (language !== 'en' && language !== 'ta') {
         if (uploadedFile.key) {
-            try { await s3StorageService.deleteObject(uploadedFile.key); } catch { /* Non-fatal */ }
+            await deleteS3ObjectOrThrow(uploadedFile.key, {
+                operation: 'attachTemplateFile.invalidLanguage',
+                templateId,
+                language,
+            });
         }
         if (uploadedFile.path && fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
         const err = new Error('Invalid language specified. Use "en" or "ta".');
@@ -212,7 +216,11 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     const template = await LetterTemplate.findById(templateId);
     if (!template) {
         if (uploadedFile.key) {
-            try { await s3StorageService.deleteObject(uploadedFile.key); } catch { /* Non-fatal */ }
+            await deleteS3ObjectOrThrow(uploadedFile.key, {
+                operation: 'attachTemplateFile.templateNotFound',
+                templateId,
+                language,
+            });
         }
         if (uploadedFile.path && fs.existsSync(uploadedFile.path)) fs.unlinkSync(uploadedFile.path);
         const err = new Error('Template not found');
@@ -224,7 +232,11 @@ const attachTemplateFile = async (templateId, language, uploadedFile, userId) =>
     const hasFlagField = language === 'en' ? 'hasEnglishVersion' : 'hasTamilVersion';
 
     if (template[fileField]?.key) {
-        try { await s3StorageService.deleteObject(template[fileField].key); } catch { /* Non-fatal */ }
+        await deleteS3ObjectOrThrow(template[fileField].key, {
+            operation: 'attachTemplateFile.replaceExisting',
+            templateId,
+            language,
+        });
     }
     if (template[fileField]?.path && fs.existsSync(template[fileField].path)) {
         try { fs.unlinkSync(template[fileField].path); } catch { /* Non-fatal */ }
@@ -278,7 +290,11 @@ const removeTemplateVariant = async (templateId, lang, userId) => {
     const hasFlagField = lang === 'en' ? 'hasEnglishVersion' : 'hasTamilVersion';
 
     if (template[fileField]?.key) {
-        try { await s3StorageService.deleteObject(template[fileField].key); } catch { /* Non-fatal */ }
+        await deleteS3ObjectOrThrow(template[fileField].key, {
+            operation: 'removeTemplateVariant',
+            templateId,
+            language: lang,
+        });
     }
     if (template[fileField]?.path && fs.existsSync(template[fileField].path)) {
         try { fs.unlinkSync(template[fileField].path); } catch { /* Non-fatal */ }
@@ -307,7 +323,11 @@ const deleteLetterTemplate = async (templateId, userId) => {
 
     for (const field of ['englishTemplateFile', 'tamilTemplateFile']) {
         if (template[field]?.key) {
-            try { await s3StorageService.deleteObject(template[field].key); } catch { /* Non-fatal */ }
+            await deleteS3ObjectOrThrow(template[field].key, {
+                operation: 'deleteLetterTemplate',
+                templateId,
+                field,
+            });
         }
         if (template[field]?.path && fs.existsSync(template[field].path)) {
             try { fs.unlinkSync(template[field].path); } catch { /* Non-fatal */ }

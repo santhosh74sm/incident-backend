@@ -9,6 +9,9 @@ const AppError = require('../utils/AppError');
 const { generateStudentInitialPassword } = require('./studentAuthService');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
+const {
+    deleteIncidentFilesFromS3OrThrow,
+} = require('./s3CleanupService');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section'];
 
@@ -207,12 +210,23 @@ const deleteStudent = async ({ studentId, actor }) => {
         throw new AppError('Student not found', 404);
     }
 
-    await Incident.deleteMany({
+    const relatedIncidentQuery = {
         $or: [
             { admissionNo: student.admissionNo },
             { studentsInvolved: student.name },
         ],
+    };
+
+    const relatedIncidents = await Incident.find(relatedIncidentQuery).select('evidence').lean();
+
+    await deleteIncidentFilesFromS3OrThrow(relatedIncidents, {
+        operation: 'deleteStudent',
+        studentId,
+        admissionNo: student.admissionNo,
+        actorId: getActorId(actor),
     });
+
+    await Incident.deleteMany(relatedIncidentQuery);
 
     await Student.findByIdAndDelete(studentId);
 

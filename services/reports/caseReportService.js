@@ -3,7 +3,6 @@
 const mongoose = require('mongoose');
 const Incident = require('../../models/Incident');
 const Student = require('../../models/Student');
-const s3StorageService = require('../s3StorageService');
 const {
     DOCX_MIME_TYPE,
     createSimpleDocx,
@@ -180,14 +179,7 @@ const buildCaseReportDocx = async (incidentId, user) => {
         category: incident.category,
     });
 
-    const upload = await s3StorageService.uploadBuffer({
-        buffer,
-        key: `exports/reports/${incident._id}/${filename}`,
-        filename,
-        contentType: DOCX_MIME_TYPE,
-    });
-
-    return { buffer, filename, url: upload.url, key: upload.key };
+    return { buffer, filename, contentType: DOCX_MIME_TYPE };
 };
 
 module.exports = {

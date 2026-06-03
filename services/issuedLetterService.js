@@ -18,6 +18,7 @@ const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { letterQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
+const { deleteS3ObjectOrThrow } = require('./s3CleanupService');
 const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
@@ -299,13 +300,6 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         }
 
         const letterNumber = await IssuedLetter.generateLetterNumber();
-        const generatedFilename = `${letterNumber}.docx`;
-        const generatedUpload = await s3StorageService.uploadBuffer({
-            buffer: outputBuffer,
-            key: `issued-letters/${incident._id}/${generatedFilename}`,
-            filename: generatedFilename,
-            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        });
         const issuedLetter = new IssuedLetter({
             letterNumber,
             incident: incident._id,
@@ -316,9 +310,9 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             incidentCategory: incident.category,
             templateId: matchingTemplate._id,
             title: matchingTemplate.title,
-            generatedDocx: null,
-            generatedDocxKey: generatedUpload.key,
-            generatedDocxUrl: generatedUpload.url,
+            generatedDocx: outputBuffer,
+            generatedDocxKey: '',
+            generatedDocxUrl: '',
             issuedBy: userId,
             status: 'Issued',
             language,
@@ -634,7 +628,12 @@ const deleteIssuedLetter = async (id, userId) => {
     }
 
     if (letter.generatedDocxKey) {
-        try { await s3StorageService.deleteObject(letter.generatedDocxKey); } catch { /* Non-fatal */ }
+        await deleteS3ObjectOrThrow(letter.generatedDocxKey, {
+            operation: 'deleteIssuedLetter',
+            letterId: id,
+            letterNumber: letter.letterNumber,
+            actorId: userId,
+        });
     }
 
     await IssuedLetter.findByIdAndDelete(id);

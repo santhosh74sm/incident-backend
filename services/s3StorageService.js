@@ -1,4 +1,4 @@
-const { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const path = require('path');
 const s3 = require('../config/s3');
@@ -85,6 +85,28 @@ const getObjectStream = async (key) => {
     };
 };
 
+const listKeysByPrefix = async (prefix) => {
+    if (!prefix) return [];
+
+    const keys = [];
+    let ContinuationToken;
+
+    do {
+        const result = await s3.send(new ListObjectsV2Command({
+            Bucket: getBucketName(),
+            Prefix: prefix,
+            ContinuationToken,
+        }));
+
+        (result.Contents || []).forEach((item) => {
+            if (item.Key) keys.push(item.Key);
+        });
+        ContinuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+
+    return keys;
+};
+
 const deleteObject = async (key) => {
     if (!key) return;
 
@@ -101,5 +123,6 @@ module.exports = {
     deleteObject,
     getBuffer,
     getObjectStream,
+    listKeysByPrefix,
     uploadBuffer,
 };
