@@ -20,7 +20,7 @@ const Log = require('../models/Log');
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
-const { autoGenerateLetterFromIncident } = require('./issuedLetterService');
+const { autoGenerateLetterFromIncident, deleteIssuedLetter } = require('./issuedLetterService');
 const notificationService = require('./notificationService');
 const { letterQueue, bulkQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
@@ -863,9 +863,18 @@ const deleteIncident = async (incidentId, user) => {
         actorId: user?.id || user?._id,
     });
 
+    const issuedLetters = await require('../models/IssuedLetter')
+        .find({ incident: incident._id })
+        .select('_id')
+        .lean();
+
+    for (const letter of issuedLetters) {
+        await deleteIssuedLetter(letter._id, user?.id || user?._id);
+    }
+
     await Incident.findByIdAndDelete(incidentId);
 
-    createLog('Incident Deleted', user.id, 'Incident', incident._id, {
+    createLog('Incident Deleted', user.id || user._id, 'Incident', incident._id, {
         title: incident.title, class: incident.class, students: incident.studentsInvolved,
     });
 

@@ -119,6 +119,7 @@ app.use('/api/logs', logRoutes);
 app.use('/api/evidence-types', evidenceTypeRoutes);
 app.use('/api/field-operation-options', fieldOperationRoutes);
 app.use('/api/issued-letters', issuedLetterRoutes);
+app.use('/api/bulk-delete', require('./routes/bulkDeleteRoutes'));
 app.use('/api/search', searchRoutes);
 
 app.get('/health', (req, res) => {

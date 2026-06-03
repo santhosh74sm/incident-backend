@@ -9,9 +9,6 @@ const AppError = require('../utils/AppError');
 const { generateStudentInitialPassword } = require('./studentAuthService');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
-const {
-    deleteIncidentFilesFromS3OrThrow,
-} = require('./s3CleanupService');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section'];
 
@@ -217,17 +214,20 @@ const deleteStudent = async ({ studentId, actor }) => {
         ],
     };
 
-    const relatedIncidents = await Incident.find(relatedIncidentQuery).select('evidence').lean();
+    const relatedIncidents = await Incident.find(relatedIncidentQuery).select('_id').lean();
+    const { deleteIncident } = require('./incidentService');
+    const { deleteIssuedLetter } = require('./issuedLetterService');
 
-    await deleteIncidentFilesFromS3OrThrow(relatedIncidents, {
-        operation: 'deleteStudent',
-        studentId,
+    for (const incident of relatedIncidents) {
+        await deleteIncident(incident._id, actor);
+    }
+
+    const remainingLetters = await IssuedLetter.find({
         admissionNo: student.admissionNo,
-        actorId: getActorId(actor),
-    });
-
-    await Incident.deleteMany(relatedIncidentQuery);
-
+    }).select('_id').lean();
+    for (const letter of remainingLetters) {
+        await deleteIssuedLetter(letter._id, getActorId(actor));
+    }
     await Student.findByIdAndDelete(studentId);
 
     createLog(
