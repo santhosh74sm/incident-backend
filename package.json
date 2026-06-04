@@ -8,6 +8,8 @@
     "start": "node server.js",
     "migrate:templates": "node scripts/migrateTemplates.js",
     "migrate:indexes": "node scripts/createIndexes.js",
+    "migrate:refresh-token-indexes": "node scripts/syncRefreshTokenIndexes.js --apply",
+    "audit:refresh-token-indexes": "node scripts/syncRefreshTokenIndexes.js",
     "migrate": "npm run migrate:templates && npm run migrate:indexes"
   },
   "keywords": [],
