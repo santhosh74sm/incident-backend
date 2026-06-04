@@ -233,43 +233,11 @@ const deleteEvidenceType = async ({ id, actor }) => {
     return { message: 'Evidence type deleted successfully' };
 };
 
-const defaultOptions = {
-    handler: [
-        { label: 'Met with student', order: 1 },
-        { label: 'Progress review completed', order: 2 },
-        { label: 'Verbal warning issued', order: 3 },
-        { label: 'Parent/guardian contacted', order: 4 },
-        { label: 'Evidence reviewed', order: 5 },
-        { label: 'Counseling session conducted', order: 6 },
-    ],
-    assigner: [
-        { label: 'Schedule 15-day counseling cycle', order: 1 },
-        { label: 'Review evidence', order: 2 },
-        { label: 'Parent notification sent', order: 3 },
-        { label: 'Handler assignment confirmed', order: 4 },
-        { label: 'Case escalated', order: 5 },
-        { label: 'Initial assessment completed', order: 6 },
-    ],
-};
-
-const seedFieldOperationDefaults = async (type, actor) => {
-    const existing = await FieldOperationOption.find(tenantFilter(actor, { type, isDefault: true })).select('_id').lean();
-    if (existing.length === 0 && defaultOptions[type]) {
-        await FieldOperationOption.insertMany(defaultOptions[type].map((option) => ({
-            schoolId: actor.schoolId,
-            ...option,
-            type,
-            isDefault: true,
-        })));
-    }
-};
-
 const getFieldOperationOptions = async (type, actor) => {
     if (!type || !['handler', 'assigner'].includes(type)) {
         throw new AppError('Valid type (handler/assigner) is required', 400);
     }
 
-    await seedFieldOperationDefaults(type, actor);
     return FieldOperationOption.find(tenantFilter(actor, { type })).sort({ order: 1 }).lean();
 };
 
