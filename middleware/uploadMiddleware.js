@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const s3StorageService = require('../services/s3StorageService');
+const { deleteS3ObjectsOrThrow } = require('../services/s3CleanupService');
+const logger = require('../utils/pinoLogger');
 const { schoolScopedKey } = require('../utils/tenant');
 const { validateDocxBuffer } = require('../utils/docxSecurity');
 
@@ -219,7 +221,36 @@ const uploadValidatedFilesToS3 = async (req, res, next) => {
     }
 };
 
+const cleanupUploadedS3OnError = async (error, req, res, next) => {
+    const keys = getUploadedFiles(req).map((file) => file?.key).filter(Boolean);
+
+    if (keys.length === 0) {
+        return next(error);
+    }
+
+    try {
+        await deleteS3ObjectsOrThrow(keys, {
+            operation: 'cleanupUploadedS3OnError',
+            path: req.originalUrl || req.path,
+            userId: req.user?.id || req.user?._id,
+            schoolId: req.user?.schoolId,
+        });
+    } catch (cleanupError) {
+        logger.error('Uploaded S3 cleanup failed after request error', {
+            originalError: error?.message,
+            cleanupError: cleanupError?.message,
+            keys,
+            path: req.originalUrl || req.path,
+        });
+        cleanupError.cause = error;
+        return next(cleanupError);
+    }
+
+    return next(error);
+};
+
 module.exports = upload;
 module.exports.local = localUpload;
 module.exports.validateFileTypes = validateFileTypes;
 module.exports.uploadValidatedFilesToS3 = uploadValidatedFilesToS3;
+module.exports.cleanupUploadedS3OnError = cleanupUploadedS3OnError;

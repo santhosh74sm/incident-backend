@@ -99,7 +99,8 @@ router
         upload.validateFileTypes,
         upload.uploadValidatedFilesToS3,
         validate(createIncidentSchema),
-        createIncident
+        createIncident,
+        upload.cleanupUploadedS3OnError
     );
 
 // ─── Single incident — must be defined BEFORE workflow sub-routes ─────────────
@@ -125,7 +126,8 @@ router.put(
     upload.validateFileTypes,
     upload.uploadValidatedFilesToS3,
     validate(addEvidenceSchema),
-    addIncidentEvidence
+    addIncidentEvidence,
+    upload.cleanupUploadedS3OnError
 );
 
 module.exports = router;

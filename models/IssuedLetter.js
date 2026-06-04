@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const IssuedLetterCounter = require('./IssuedLetterCounter');
 
 const issuedLetterSchema = new mongoose.Schema({
     letterNumber: {
@@ -100,29 +101,62 @@ issuedLetterSchema.index({ schoolId: 1, studentName: 1, className: 1 });
 issuedLetterSchema.index({ schoolId: 1, className: 1, section: 1 });
 issuedLetterSchema.index({ schoolId: 1, generatedAt: -1 });
 
+const getExistingMaxLetterSequence = async (IssuedLetterModel, schoolId, year) => {
+    const lastLetter = await IssuedLetterModel.findOne({
+        schoolId,
+        letterNumber: new RegExp(`^LET-${year}-`)
+    }).sort({ letterNumber: -1 }).select('letterNumber').lean();
+
+    const match = lastLetter?.letterNumber?.match(/LET-\d{4}-(\d+)/);
+    return match?.[1] ? parseInt(match[1], 10) : 0;
+};
+
+const ensureLetterCounter = async (IssuedLetterModel, schoolId, year, counterId) => {
+    const existingMax = await getExistingMaxLetterSequence(IssuedLetterModel, schoolId, year);
+
+    try {
+        return await IssuedLetterCounter.findOneAndUpdate(
+            { _id: counterId },
+            {
+                $setOnInsert: {
+                    _id: counterId,
+                    schoolId,
+                    scope: 'issuedLetter',
+                    year,
+                    seq: existingMax,
+                },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+    } catch (error) {
+        if (error.code === 11000) {
+            return IssuedLetterCounter.findById(counterId);
+        }
+        throw error;
+    }
+};
+
 issuedLetterSchema.statics.generateLetterNumber = async function(schoolId) {
+    const normalizedSchoolId = String(schoolId || '').toUpperCase().trim();
     const year = new Date().getFullYear();
-    const lastLetter = await this.findOne({
-        schoolId,
-        letterNumber: new RegExp(`^LET-${year}-`)
-    }).sort({ letterNumber: -1 });
+    const counterId = `${normalizedSchoolId}:issuedLetter:${year}`;
 
-    if (!lastLetter || !lastLetter.letterNumber) {
-        return `LET-${year}-00001`;
-    }
+    await ensureLetterCounter(this, normalizedSchoolId, year, counterId);
 
-    const match = lastLetter.letterNumber.match(/LET-\d{4}-(\d+)/);
-    if (match && match[1]) {
-        const nextNum = parseInt(match[1], 10) + 1;
-        return `LET-${year}-${String(nextNum).padStart(5, '0')}`;
-    }
+    const counter = await IssuedLetterCounter.findOneAndUpdate(
+        { _id: counterId },
+        {
+            $inc: { seq: 1 },
+            $set: {
+                schoolId: normalizedSchoolId,
+                scope: 'issuedLetter',
+                year,
+            },
+        },
+        { new: true }
+    ).lean();
 
-    // Fallback if parsing fails
-    const count = await this.countDocuments({
-        schoolId,
-        letterNumber: new RegExp(`^LET-${year}-`)
-    });
-    return `LET-${year}-${String(count + 1).padStart(5, '0')}`;
+    return `LET-${year}-${String(counter.seq).padStart(5, '0')}`;
 };
 
 issuedLetterSchema.statics.getStats = async function(query = {}) {

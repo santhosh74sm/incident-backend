@@ -17,6 +17,7 @@ const createIndexes = async () => {
         const EvidenceType = require('../models/EvidenceType');
         const FieldOperationOption = require('../models/FieldOperationOption');
         const SchoolWorkspace = require('../models/SchoolWorkspace');
+        const IssuedLetterCounter = require('../models/IssuedLetterCounter');
 
         const safeDropIndex = async (collection, indexName) => {
             try {
@@ -77,6 +78,7 @@ const createIndexes = async () => {
         await Student.collection.createIndex({ schoolId: 1, className: 1, section: 1 });
 
         await IssuedLetter.collection.createIndex({ schoolId: 1, letterNumber: 1 }, { unique: true });
+        await IssuedLetterCounter.collection.createIndex({ schoolId: 1, scope: 1, year: 1 }, { unique: true });
         await IssuedLetter.collection.createIndex({ schoolId: 1, 'incident': 1 });
         await IssuedLetter.collection.createIndex({ schoolId: 1, 'admissionNo': 1 });
         await IssuedLetter.collection.createIndex({ schoolId: 1, 'studentName': 1 });
