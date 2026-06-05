@@ -14,6 +14,7 @@ const { protect } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
 const { filenameParamSchema } = require('../validators/fileValidators');
 const s3StorageService = require('../services/s3StorageService');
+const { decryptS3KeyToken } = require('../utils/protectedFileUrl');
 
 const router = express.Router();
 const uploadRoot = path.resolve(__dirname, '..', 'uploads');
@@ -118,7 +119,8 @@ router.get('/:filename', protect, validate(filenameParamSchema, 'params'), (req,
 
 router.get(/^\/s3\/(.+)/, protect, async (req, res, next) => {
     try {
-        const key = decodeURIComponent(req.params[0] || '').replace(/^\/+/, '');
+        const requestedKey = decodeURIComponent(req.params[0] || '').replace(/^\/+/, '');
+        const key = decryptS3KeyToken(requestedKey) || requestedKey;
         const requestedDisposition = String(req.query.disposition || req.query.responseContentDisposition || '').toLowerCase();
 
         if (!key || key.includes('..') || key.includes('\\')) {

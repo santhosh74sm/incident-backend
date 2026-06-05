@@ -2,6 +2,7 @@ const { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCo
 const crypto = require('crypto');
 const path = require('path');
 const s3 = require('../config/s3');
+const { buildProtectedS3Url } = require('../utils/protectedFileUrl');
 
 const getBucketName = () => {
     if (!process.env.AWS_BUCKET_NAME) {
@@ -21,7 +22,7 @@ const buildS3Url = (key) => {
         : `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
 };
 
-const buildProtectedUrl = (key) => `/api/uploads/s3/${key.split('/').map(encodeURIComponent).join('/')}`;
+const buildProtectedUrl = (key) => buildProtectedS3Url(key);
 
 const streamToBuffer = async (stream) => {
     const chunks = [];

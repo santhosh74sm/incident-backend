@@ -1,8 +1,10 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { protectS3UrlValue } = require('./protectedFileUrl');
 
 const isObjectId = (value) => value instanceof mongoose.Types.ObjectId;
+const PRIVATE_RESPONSE_KEYS = new Set(['schoolId']);
 
 const serializeValue = (value, seen = new WeakMap()) => {
     if (value == null) return value;
@@ -14,7 +16,7 @@ const serializeValue = (value, seen = new WeakMap()) => {
         return value.map((item) => serializeValue(item, seen));
     }
 
-    if (typeof value !== 'object') return value;
+    if (typeof value !== 'object') return protectS3UrlValue(value);
 
     const plainValue = typeof value.toObject === 'function'
         ? value.toObject({ virtuals: true })
@@ -30,6 +32,7 @@ const serializeValue = (value, seen = new WeakMap()) => {
     seen.set(plainValue, output);
 
     for (const [key, entry] of Object.entries(plainValue)) {
+        if (PRIVATE_RESPONSE_KEYS.has(key)) continue;
         if (key === '__v') continue;
         if (key === '_id') {
             if (output.id == null && entry != null) {
