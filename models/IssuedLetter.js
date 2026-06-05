@@ -99,6 +99,10 @@ const issuedLetterSchema = new mongoose.Schema({
 issuedLetterSchema.index({ schoolId: 1, letterNumber: 1 }, { unique: true });
 issuedLetterSchema.index({ schoolId: 1, studentName: 1, className: 1 });
 issuedLetterSchema.index({ schoolId: 1, className: 1, section: 1 });
+issuedLetterSchema.index({ schoolId: 1, admissionNo: 1, generatedAt: -1 });
+issuedLetterSchema.index({ schoolId: 1, incident: 1, generatedAt: -1 });
+issuedLetterSchema.index({ schoolId: 1, incidentCategory: 1, generatedAt: -1 });
+issuedLetterSchema.index({ schoolId: 1, status: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, generatedAt: -1 });
 
 const getExistingMaxLetterSequence = async (IssuedLetterModel, schoolId, year) => {

@@ -89,6 +89,21 @@ const createIndexes = async () => {
             admissionNo: 1,
             generatedAt: -1
         });
+        await IssuedLetter.collection.createIndex({
+            schoolId: 1,
+            incident: 1,
+            generatedAt: -1
+        });
+        await IssuedLetter.collection.createIndex({
+            schoolId: 1,
+            incidentCategory: 1,
+            generatedAt: -1
+        });
+        await IssuedLetter.collection.createIndex({
+            schoolId: 1,
+            status: 1,
+            generatedAt: -1
+        });
 
         await LetterTemplate.collection.createIndex({ schoolId: 1, incidentCategory: 1 }, { unique: true });
         await LetterTemplate.collection.createIndex({ schoolId: 1, 'isActive': 1 });

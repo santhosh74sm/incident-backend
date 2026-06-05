@@ -23,12 +23,20 @@ const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
 const { tenantFilter, schoolScopedKey } = require('../utils/tenant');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
+const LETTER_RESPONSE_EXCLUDE = '-generatedDocx';
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const toIdString = (value) => {
     if (!value) return '';
     if (value._id) return String(value._id);
     return String(value);
+};
+
+const stripGeneratedDocx = (letter) => {
+    if (!letter) return letter;
+    const value = typeof letter.toObject === 'function' ? letter.toObject() : { ...letter };
+    delete value.generatedDocx;
+    return value;
 };
 
 const canAccessIncident = (incident, user) => {
@@ -461,6 +469,7 @@ const listIssuedLetters = async (query, user) => {
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
 
     let letterQuery = IssuedLetter.find(builtQuery)
+        .select(LETTER_RESPONSE_EXCLUDE)
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -490,6 +499,7 @@ const listIssuedLetters = async (query, user) => {
 
 const getIssuedLetterById = async (id, user) => {
     const letter = await IssuedLetter.findOne(tenantFilter(user, { _id: id }))
+        .select(LETTER_RESPONSE_EXCLUDE)
         .populate('issuedBy', 'name role')
         .populate('incident', 'title description category status location severity')
         .lean();
@@ -504,6 +514,7 @@ const getIssuedLetterById = async (id, user) => {
 const getLettersByIncident = async (incidentId, user) => {
     await assertIncidentLetterAccess(incidentId, user);
     return IssuedLetter.find(tenantFilter(user, { incident: incidentId }))
+        .select(LETTER_RESPONSE_EXCLUDE)
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -530,6 +541,7 @@ const getLettersByStudent = async (admissionNo, query, user) => {
         letterQuery.incident = { $in: matchingIncidentIds };
     }
     return IssuedLetter.find(tenantFilter(user, letterQuery))
+        .select(LETTER_RESPONSE_EXCLUDE)
         .populate('issuedBy', 'name')
         .populate(
             'incident',
@@ -578,7 +590,7 @@ const generateLetterFromIncident = async (incidentId, language, user) => {
 
     const existing = await IssuedLetter.findOne(tenantFilter(user, { incident: incident._id, language }));
     if (existing) {
-        return { alreadyExists: true, letter: existing };
+        return { alreadyExists: true, letter: stripGeneratedDocx(existing) };
     }
 
     // Offload DOCX rendering to letterQueue (non-blocking)
@@ -592,7 +604,7 @@ const generateLetterFromIncident = async (incidentId, language, user) => {
         throw err;
     }
 
-    return { alreadyExists: false, letter: result.letter };
+    return { alreadyExists: false, letter: stripGeneratedDocx(result.letter) };
 };
 
 const updateIssuedLetter = async (id, body, user) => {
@@ -620,7 +632,7 @@ const updateIssuedLetter = async (id, body, user) => {
         incidentId: letter.incident,
     });
 
-    return letter;
+    return stripGeneratedDocx(letter);
 };
 
 const deleteIssuedLetter = async (id, user) => {

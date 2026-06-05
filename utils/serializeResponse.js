@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const { protectS3UrlValue } = require('./protectedFileUrl');
 
 const isObjectId = (value) => value instanceof mongoose.Types.ObjectId;
-const PRIVATE_RESPONSE_KEYS = new Set(['schoolId']);
+const PRIVATE_RESPONSE_KEYS = new Set(['schoolId', 'password']);
 
 const serializeValue = (value, seen = new WeakMap()) => {
     if (value == null) return value;
