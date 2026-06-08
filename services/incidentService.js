@@ -117,7 +117,13 @@ const buildEvidenceEntriesFromUploads = (files = [], evidenceDataList = []) =>
             const meta = evidenceDataList[index] || {};
             const fileUrl = getPublicUploadPath(file);
             if (!fileUrl) return null;
-            return { evidenceType: meta.evidenceType || 'General Evidence', fileUrl };
+            return {
+                evidenceType: meta.evidenceType || 'General Evidence',
+                fileUrl,
+                originalName: file.originalname || file.filename || '',
+                mimeType: file.mimetype || '',
+                fileSize: file.size || 0,
+            };
         })
         .filter(Boolean);
 

@@ -16,6 +16,9 @@ const incidentSchema = new mongoose.Schema(
             {
                 evidenceType: { type: String, required: true },
                 fileUrl: { type: String, default: null },
+                originalName: { type: String, default: '' },
+                mimeType: { type: String, default: '' },
+                fileSize: { type: Number, default: 0 },
             },
         ],
         category: { type: String, required: true },

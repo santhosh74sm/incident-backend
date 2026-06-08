@@ -51,6 +51,7 @@ const isExemptPath = (req) => {
     return (
         path === '/api/auth/login' ||
         path === '/api/auth/register' ||
+        path === '/api/auth/workspaces' ||
         path === '/api/auth/admin-exists' ||
         path === '/api/auth/bootstrap-status'
     );
