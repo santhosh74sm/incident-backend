@@ -153,7 +153,7 @@ const registerUser = async ({ input, actor }) => {
     createLog(
         'STAFF_REGISTERED',
         getActorId(actor),
-        'System',
+        'Staff',
         user._id,
         {
             Name: user.name,
@@ -371,9 +371,9 @@ const deleteUser = async ({ id, actor }) => {
     createLog(
         'ADMIN_DELETE_USER',
         getActorId(actor),
-        'System',
+        'Staff',
         user._id,
-        { Name: user.name, Role: user.role }
+        { Name: user.name, Role: user.role, targetLabel: user.name }
     );
 
     return { message: 'Staff member removed' };
@@ -404,7 +404,7 @@ const resetUserPassword = async ({ id, actor }) => {
     await user.save();
     await revokeUserSessions({ userId: user._id, type: 'staff' });
 
-    createLog('PASSWORD_RESET_BY_SUPER_ADMIN', getActorId(actor), 'System', user._id, {
+    createLog('PASSWORD_RESET_BY_SUPER_ADMIN', getActorId(actor), 'Staff', user._id, {
         Name: user.name,
         Role: user.role,
         targetLabel: user.name,

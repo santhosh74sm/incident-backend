@@ -66,6 +66,9 @@ const buildRoutePath = (entityType, entityId, metadata = {}) => {
             return incidentId ? `/incidents/${incidentId}` : '/issued-letters';
         case 'Template':
             return '/letter-templates';
+        case 'Staff':
+        case 'User':
+            return '/user-management';
         case 'Student':
             return admissionNumber ? `/student-analytics/${admissionNumber}` : '/user-management';
         case 'Bulk Upload':
@@ -199,6 +202,7 @@ const createLog = (
                 performedBy: normalizedPerformedBy,
                 entityType,
                 entityId: normalizedEntityId,
+                targetLabel: notificationConfig?.targetLabel || pickTargetLabel(metadata, normalizedEntityId),
                 metadata,
             });
 
