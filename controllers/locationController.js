@@ -2,7 +2,9 @@ const optionService = require('../services/optionService');
 
 const getLocations = async (req, res, next) => {
     try {
-        res.status(200).json(await optionService.getLocations(req.user));
+        res.status(200).json(await optionService.getLocations(req.user, {
+            includeUnknown: String(req.query.includeUnknown || '').toLowerCase() === 'true',
+        }));
     } catch (error) {
         next(error);
     }

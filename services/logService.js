@@ -33,7 +33,7 @@ const DISPLAY_ENTITY_LABELS = {
     System: 'System Activity',
     Analytics: 'System Activity',
     'Bulk Upload': 'System Activity',
-    EvidenceType: 'System Activity',
+    EvidenceType: 'Evidence Type',
 };
 
 const LOOKUP_MODELS = {

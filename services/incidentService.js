@@ -37,6 +37,7 @@ const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g,
 const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
 const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
 const MAX_PROGRESS_LOGS = 500;
+const UNKNOWN_FILTER_LABEL = 'Unknown';
 const isAdministrationRole = (role) => ADMIN_ROLES.includes(role);
 
 const toIdString = (value) => {
@@ -118,7 +119,7 @@ const buildEvidenceEntriesFromUploads = (files = [], evidenceDataList = []) =>
             const fileUrl = getPublicUploadPath(file);
             if (!fileUrl) return null;
             return {
-                evidenceType: meta.evidenceType || 'General Evidence',
+                evidenceType: String(meta.evidenceType || '').trim() || UNKNOWN_FILTER_LABEL,
                 fileUrl,
                 originalName: file.originalname || file.filename || '',
                 mimeType: file.mimetype || '',
@@ -167,6 +168,69 @@ const parseListParam = (value) => {
 
 const parseAliasedListParam = (query, keys = []) =>
     [...new Set(keys.flatMap((key) => parseListParam(query?.[key])))];
+
+const splitKnownAndUnknownValues = (values = []) => {
+    const knownValues = [];
+    let includesUnknown = false;
+
+    values.forEach((value) => {
+        const normalized = String(value || '').trim();
+        if (!normalized) return;
+        if (normalized.toLowerCase() === UNKNOWN_FILTER_LABEL.toLowerCase()) {
+            includesUnknown = true;
+            return;
+        }
+        knownValues.push(normalized);
+    });
+
+    return { knownValues: [...new Set(knownValues)], includesUnknown };
+};
+
+const buildNullableStringFilter = (field, values = []) => {
+    const { knownValues, includesUnknown } = splitKnownAndUnknownValues(values);
+    const conditions = [];
+
+    if (knownValues.length > 0) {
+        conditions.push({ [field]: { $in: knownValues } });
+    }
+
+    if (includesUnknown) {
+        conditions.push({
+            $or: [
+                { [field]: { $exists: false } },
+                { [field]: null },
+                { [field]: { $regex: /^\s*$/ } },
+            ],
+        });
+    }
+
+    if (conditions.length === 0) return null;
+    return conditions.length === 1 ? conditions[0] : { $or: conditions };
+};
+
+const buildEvidenceTypeFilter = (values = []) => {
+    const { knownValues, includesUnknown } = splitKnownAndUnknownValues(values);
+    const conditions = [];
+
+    if (knownValues.length > 0) {
+        conditions.push({ 'evidence.evidenceType': { $in: knownValues } });
+    }
+
+    if (includesUnknown) {
+        conditions.push({
+            $or: [
+                { evidence: { $exists: false } },
+                { evidence: { $size: 0 } },
+                { 'evidence.evidenceType': { $exists: false } },
+                { 'evidence.evidenceType': null },
+                { 'evidence.evidenceType': '' },
+            ],
+        });
+    }
+
+    if (conditions.length === 0) return null;
+    return conditions.length === 1 ? conditions[0] : { $or: conditions };
+};
 
 const STATUS_LOOKUP = {
     open: 'Open',
@@ -234,10 +298,12 @@ const buildIncidentQuery = async (user, query) => {
     if (types.length > 0) baseConditions.push({ category: { $in: types } });
 
     const locations = parseAliasedListParam(query, ['locations', 'location']);
-    if (locations.length > 0) baseConditions.push({ location: { $in: locations } });
+    const locationFilter = buildNullableStringFilter('location', locations);
+    if (locationFilter) baseConditions.push(locationFilter);
 
     const evidenceTypes = parseAliasedListParam(query, ['evidenceTypes', 'evidenceType']);
-    if (evidenceTypes.length > 0) baseConditions.push({ 'evidence.evidenceType': { $in: evidenceTypes } });
+    const evidenceTypeFilter = buildEvidenceTypeFilter(evidenceTypes);
+    if (evidenceTypeFilter) baseConditions.push(evidenceTypeFilter);
 
     const months = parseAliasedListParam(query, ['months'])
         .map((m) => parseInt(m, 10))
@@ -606,13 +672,24 @@ const getLocationDistribution = async ({ user, query }) => {
 
     const grouped = await Incident.aggregate([
         { $match: builtQuery },
-        { $group: { _id: { $ifNull: ['$location', 'Unknown'] }, count: { $sum: 1 } } },
+        {
+            $group: {
+                _id: {
+                    $cond: [
+                        { $gt: [{ $strLenCP: { $trim: { input: { $ifNull: ['$location', ''] } } } }, 0] },
+                        { $trim: { input: { $ifNull: ['$location', ''] } } },
+                        UNKNOWN_FILTER_LABEL,
+                    ],
+                },
+                count: { $sum: 1 },
+            },
+        },
         { $project: { _id: 0, location: '$_id', count: 1 } },
         { $sort: { count: -1, location: 1 } },
     ]);
 
     return grouped.reduce((rows, entry) => {
-        const location = String(entry.location || 'Unknown').trim() || 'Unknown';
+        const location = String(entry.location || UNKNOWN_FILTER_LABEL).trim() || UNKNOWN_FILTER_LABEL;
         const existing = rows.find((r) => r.location === location);
         if (existing) { existing.count += entry.count; return rows; }
         rows.push({ location, count: entry.count });

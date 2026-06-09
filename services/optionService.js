@@ -10,6 +10,7 @@ const { tenantFilter, tenantDoc } = require('../utils/tenant');
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
+const UNKNOWN_FILTER_LABEL = 'Unknown';
 
 const ensureOptionManager = (actor, message = 'Access Denied') => {
     if (!['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'].includes(actor?.role)) {
@@ -91,7 +92,25 @@ const deleteCategory = async ({ id, actor }) => {
     return { message: 'Category deleted successfully' };
 };
 
-const getLocations = async (actor) => Location.find(tenantFilter(actor)).sort({ name: 1 }).lean();
+const getLocations = async (actor, { includeUnknown = false } = {}) => {
+    const locations = await Location.find(tenantFilter(actor)).sort({ name: 1 }).lean();
+    if (!includeUnknown) return locations;
+
+    const hasUnknownLocationRecords = await Incident.exists(tenantFilter(actor, {
+        $or: [
+            { location: { $exists: false } },
+            { location: null },
+            { location: { $regex: /^\s*$/ } },
+        ],
+    }));
+
+    const alreadyHasUnknown = locations.some(
+        (location) => String(location?.name || '').trim().toLowerCase() === UNKNOWN_FILTER_LABEL.toLowerCase()
+    );
+
+    if (!hasUnknownLocationRecords || alreadyHasUnknown) return locations;
+    return [...locations, { id: UNKNOWN_FILTER_LABEL, name: UNKNOWN_FILTER_LABEL, virtual: true }];
+};
 
 const addLocation = async ({ input, actor }) => {
     ensureOptionManager(actor);
