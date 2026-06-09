@@ -188,7 +188,13 @@ const uploadStudents = async ({ filePath, actor }) => {
             getActorId(actor),
             'Student',
             null,
-            { Count: insertedCount, Action: 'Insert' }
+            {
+                targetLabel: `${insertedCount} students imported`,
+                Count: insertedCount,
+                Action: 'Insert',
+                summary: true,
+                uploadType: 'Student',
+            }
         );
 
         return { 

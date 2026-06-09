@@ -575,22 +575,20 @@ const createIncidents = async ({ body, files, user }) => {
         const inserted = await Incident.insertMany(incidentsToInsert);
         createdIncidents.push(...inserted);
 
-        createLog(
-            useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
-            user.id || user._id,
-            'Incident',
-            createdIncidents[0]._id,
-            {
-                title: createdIncidents[0]?.title,
-                studentName: createdIncidents[0]?.studentsInvolved?.[0] || null,
-                class: createdIncidents[0]?.class || null,
-                section: createdIncidents[0]?.section || null,
-                category: body.category,
-                count: createdIncidents.length,
-                reportedBy: user.name,
-                isBulkSubmission,
-            }
-        );
+        createdIncidents.forEach((incident) => {
+            createLog(
+                useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
+                user.id || user._id,
+                'Incident',
+                incident._id,
+                buildIncidentMetadata(incident, {
+                    category: body.category,
+                    reportedBy: user.name,
+                    isBulkSubmission,
+                    batchCount: createdIncidents.length,
+                })
+            );
+        });
     }
 
     if (shouldGenerate) {
@@ -1283,7 +1281,14 @@ const processExcelUpload = async (filePath, user, body) => {
         await Promise.all(letterPromises);
     }
 
-    createLog('Bulk Upload Processed', user.id, 'Bulk Upload', null, { count: createdIncidents.length, lettersGenerated: lettersGenerated.length });
+    createLog('Bulk Upload Processed', user.id, 'Bulk Upload', null, {
+        targetLabel: `${createdIncidents.length} incidents uploaded`,
+        count: createdIncidents.length,
+        lettersGenerated: lettersGenerated.length,
+        summary: true,
+        uploadType: 'Incident',
+        routePath: '/upload-incidents',
+    });
 
     // Notify admins via SSE
     try {
