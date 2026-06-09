@@ -223,7 +223,7 @@ const buildEvidenceTypeFilter = (values = []) => {
                 { evidence: { $size: 0 } },
                 { 'evidence.evidenceType': { $exists: false } },
                 { 'evidence.evidenceType': null },
-                { 'evidence.evidenceType': '' },
+                { 'evidence.evidenceType': { $regex: /^\s*$/ } },
             ],
         });
     }

@@ -2,7 +2,9 @@ const optionService = require('../services/optionService');
 
 const getEvidenceTypes = async (req, res, next) => {
     try {
-        res.json(await optionService.getEvidenceTypes(req.user));
+        res.json(await optionService.getEvidenceTypes(req.user, {
+            includeUnknown: String(req.query.includeUnknown || '').toLowerCase() === 'true',
+        }));
     } catch (error) {
         next(error);
     }

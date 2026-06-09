@@ -175,7 +175,27 @@ const deleteLocation = async ({ id, actor }) => {
     return { message: 'Location deleted successfully' };
 };
 
-const getEvidenceTypes = async (actor) => EvidenceType.find(tenantFilter(actor)).sort({ name: 1 }).lean();
+const getEvidenceTypes = async (actor, { includeUnknown = false } = {}) => {
+    const evidenceTypes = await EvidenceType.find(tenantFilter(actor)).sort({ name: 1 }).lean();
+    if (!includeUnknown) return evidenceTypes;
+
+    const hasUnknownEvidenceRecords = await Incident.exists(tenantFilter(actor, {
+        $or: [
+            { evidence: { $exists: false } },
+            { evidence: { $size: 0 } },
+            { 'evidence.evidenceType': { $exists: false } },
+            { 'evidence.evidenceType': null },
+            { 'evidence.evidenceType': { $regex: /^\s*$/ } },
+        ],
+    }));
+
+    const alreadyHasUnknown = evidenceTypes.some(
+        (evidenceType) => String(evidenceType?.name || '').trim().toLowerCase() === UNKNOWN_FILTER_LABEL.toLowerCase()
+    );
+
+    if (!hasUnknownEvidenceRecords || alreadyHasUnknown) return evidenceTypes;
+    return [...evidenceTypes, { id: UNKNOWN_FILTER_LABEL, name: UNKNOWN_FILTER_LABEL, virtual: true }];
+};
 
 const addEvidenceType = async ({ input, actor }) => {
     ensureOptionManager(actor, 'Admin or Teacher access required');
