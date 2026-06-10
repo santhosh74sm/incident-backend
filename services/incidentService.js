@@ -310,13 +310,9 @@ const buildIncidentQuery = async (user, query) => {
         .filter((m) => !Number.isNaN(m));
 
     if (months.length > 0) {
-        const currentYear = new Date().getFullYear();
         baseConditions.push({
             $expr: {
-                $and: [
-                    { $in: [{ $month: { $ifNull: ['$incidentDate', '$incident_date'] } }, months] },
-                    { $eq: [{ $year: { $ifNull: ['$incidentDate', '$incident_date'] } }, currentYear] },
-                ],
+                $in: [{ $month: { $ifNull: ['$incidentDate', '$incident_date'] } }, months],
             },
         });
     }
