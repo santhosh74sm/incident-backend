@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const XLSX = require('xlsx');
 
 const Incident = require('../models/Incident');
+const IncidentReadState = require('../models/IncidentReadState');
 const Student = require('../models/Student');
 const User = require('../models/User');
 const Category = require('../models/Category');
@@ -44,6 +45,34 @@ const toIdString = (value) => {
     if (!value) return '';
     if (value._id) return String(value._id);
     return String(value);
+};
+
+const getUserId = (user) => toIdString(user?.id || user?._id);
+
+const attachReadState = async (incidents, user) => {
+    const items = Array.isArray(incidents) ? incidents : [];
+    const userId = getUserId(user);
+    if (!items.length || !userId || !user?.schoolId) {
+        return items.map((incident) => ({ ...incident, readByCurrentUser: false, readAt: null }));
+    }
+
+    const incidentIds = items.map((incident) => incident?._id).filter(Boolean);
+    const readStates = await IncidentReadState.find({
+        schoolId: user.schoolId,
+        user: userId,
+        incident: { $in: incidentIds },
+    }).select('incident readAt').lean();
+
+    const readMap = new Map(readStates.map((state) => [String(state.incident), state.readAt]));
+
+    return items.map((incident) => {
+        const readAt = readMap.get(String(incident._id)) || null;
+        return {
+            ...incident,
+            readByCurrentUser: Boolean(readAt),
+            readAt,
+        };
+    });
 };
 
 const canAccessIncident = (incident, user) => {
@@ -631,7 +660,7 @@ const listIncidents = async ({ user, query }) => {
         shouldPaginate ? Incident.countDocuments(builtQuery) : Promise.resolve(null),
     ]);
 
-    const enhanced = await enrichIncidentsWithStudentDetails(data);
+    const enhanced = await attachReadState(await enrichIncidentsWithStudentDetails(data), user);
 
     if (shouldPaginate) {
         return {
@@ -744,7 +773,39 @@ const getIncidentById = async (id, user) => {
         incidentObj.studentDetails = null;
     }
 
-    return incidentObj;
+    const [incidentWithReadState] = await attachReadState([incidentObj], user);
+    return incidentWithReadState;
+};
+
+const markIncidentRead = async (incidentId, user) => {
+    if (!mongoose.Types.ObjectId.isValid(incidentId)) {
+        const err = new Error('Invalid incident ID');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId })).lean();
+    if (!incident) {
+        const err = new Error('Incident not found');
+        err.statusCode = 404;
+        throw err;
+    }
+
+    assertIncidentAccess(incident, user, 'view');
+
+    const userId = getUserId(user);
+    const readAt = new Date();
+    await IncidentReadState.findOneAndUpdate(
+        { schoolId: user.schoolId, user: userId, incident: incidentId },
+        { $set: { readAt } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    notificationService
+        .markAsReadByIncident({ incidentId, userId, schoolId: user.schoolId })
+        .catch((err) => logger.warn('Incident notification read sync failed', { incidentId, userId, error: err.message }));
+
+    return { incidentId, readByCurrentUser: true, readAt };
 };
 
 const approveAndAssign = async (incidentId, handlerId, user) => {
@@ -955,6 +1016,7 @@ const deleteIncident = async (incidentId, user) => {
     }
 
     await Incident.findOneAndDelete(tenantFilter(user, { _id: incidentId }));
+    await IncidentReadState.deleteMany(tenantFilter(user, { incident: incidentId }));
 
     createLog('Incident Deleted', user.id || user._id, 'Incident', incident._id, {
         title: incident.title, class: incident.class, students: incident.studentsInvolved,
@@ -1385,6 +1447,7 @@ module.exports = {
     getDistinctSections,
     getLocationDistribution,
     getIncidentById,
+    markIncidentRead,
     approveAndAssign,
     addProgressNote,
     requestClosure,

@@ -101,6 +101,14 @@ const getIncidentById = async (req, res, next) => {
     }
 };
 
+const markIncidentRead = async (req, res, next) => {
+    try {
+        res.json(await incidentService.markIncidentRead(req.params.id, req.user));
+    } catch (error) {
+        next(error);
+    }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. Approve & Assign Handler
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,6 +294,7 @@ module.exports = {
     getIncidents,
     getIncidentLocationDistribution,
     getIncidentById,
+    markIncidentRead,
     approveAndAssign,
     addProgressNote,
     requestClosure,

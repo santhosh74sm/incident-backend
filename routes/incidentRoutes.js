@@ -13,6 +13,7 @@ const {
     createIncident,
     getIncidents,
     getIncidentById,
+    markIncidentRead,
     getIncidentLocationDistribution,
     addProgressNote,
     requestClosure,
@@ -104,6 +105,7 @@ router
     );
 
 // ─── Single incident — must be defined BEFORE workflow sub-routes ─────────────
+router.put('/:id/read', protect, validate(objectIdParamSchema, 'params'), markIncidentRead);
 router.get('/:id', protect, validate(objectIdParamSchema, 'params'), getIncidentById);
 router.delete('/:id', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), deleteIncident);
 
