@@ -170,6 +170,18 @@ const changeStaffPassword = async (req, res, next) => {
     }
 };
 
+const updateUser = async (req, res, next) => {
+    try {
+        res.json(await authService.updateUser({
+            id: req.params.id,
+            input: req.body,
+            actor: req.user,
+        }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 const resetUserPassword = async (req, res, next) => {
     try {
         res.json(await authService.resetUserPassword({
@@ -188,6 +200,7 @@ module.exports = {
     loginUser,
     refreshSession,
     getAllUsers,
+    updateUser,
     deleteUser,
     getMe,
     getCsrf,

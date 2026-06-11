@@ -44,7 +44,7 @@ const userSchema = new mongoose.Schema(
             default: null,
         },
 
-        // Normalised staff role. Lowercase variants are retained for legacy documents.
+        // Normalised staff-account role. Lowercase variants are retained for legacy documents.
         // Lowercase variants are kept for backward-compat with existing documents;
         // authMiddleware normalises them on every authenticated request.
         role: {

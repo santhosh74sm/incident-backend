@@ -12,6 +12,7 @@ const {
 } = require('../../utils/docxSecurity');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
+const OPERATIONAL_ROLES = new Set(['Teacher', 'teacher']);
 
 const toIdString = (value) => {
     if (!value) return '';
@@ -36,7 +37,7 @@ const assertReportAccess = (incident, user) => {
 
     const userId = toIdString(user.id || user._id);
     const canAccess =
-        (user.role === 'Teacher' && [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId)) ||
+        (OPERATIONAL_ROLES.has(user.role) && [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId)) ||
         (user.role === 'Student' && String(incident.admissionNo || '') === String(user.admissionNo || ''));
 
     if (!canAccess) {

@@ -23,6 +23,7 @@ const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
 const { tenantFilter, schoolScopedKey } = require('../utils/tenant');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
+const OPERATIONAL_ROLES = new Set(['Teacher', 'teacher']);
 const LETTER_RESPONSE_EXCLUDE = '-generatedDocx';
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -45,7 +46,7 @@ const canAccessIncident = (incident, user) => {
     if (ADMIN_ROLES.has(user.role)) return true;
 
     const userId = toIdString(user.id || user._id);
-    if (user.role === 'Teacher') {
+    if (OPERATIONAL_ROLES.has(user.role)) {
         return [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId);
     }
 

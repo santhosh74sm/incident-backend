@@ -6,6 +6,7 @@ const {
     createStaffUser,
     loginUser,
     getAllUsers,
+    updateUser,
     deleteUser,
     getMe,
     getCsrf,
@@ -19,6 +20,7 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
 const {
     registerSchema,
+    updateUserSchema,
     workspaceSchema,
     loginSchema,
     changeStudentPasswordSchema,
@@ -49,6 +51,7 @@ router.post('/change-password', protect, validate(changeStudentPasswordSchema), 
 router.post('/users', protect, authorize('Super Admin', 'Admin'), validate(registerSchema), createStaffUser);
 router.get('/users', protect, authorize('Super Admin', 'Admin', 'Teacher'), getAllUsers);
 router.post('/users/:id/reset-password', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), resetUserPassword);
-router.delete('/users/:id', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), deleteUser);
+router.put('/users/:id', protect, validate(objectIdParamSchema, 'params'), validate(updateUserSchema), updateUser);
+router.delete('/users/:id', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), deleteUser);
 
 module.exports = router;

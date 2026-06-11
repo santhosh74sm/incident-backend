@@ -18,7 +18,8 @@ const ROLE_MAP = {
 
 const ADMIN_ROLES = ['Super Admin', 'Admin'];
 const TEACHER_ROLES = ['Teacher', 'teacher'];
-const STAFF_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
+const ACCOUNT_USER_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
+const EDITABLE_ROLES = ['Admin', 'Teacher'];
 const PASSWORD_MIN_LENGTH = 8;
 
 const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include uppercase, lowercase, number, and symbol.';
@@ -94,15 +95,26 @@ const ensureCanManageUser = (actor, targetUser, actionLabel = 'manage') => {
         return;
     }
 
-    if (actorRole === 'Admin' && targetRole === 'Teacher') {
-        return;
-    }
-
     if (actorId && actorId === targetId && actionLabel === 'change password') {
         return;
     }
 
     throw new AppError(`Admins cannot ${actionLabel} ${targetRole || 'this account'} accounts.`, 403);
+};
+
+const ensureAtLeastOneSuperAdminRemains = async ({ user, nextRole = null, actionLabel = 'change' }) => {
+    if (toClientRole(user?.role) !== 'Super Admin') return;
+    if (!nextRole || toClientRole(nextRole) === 'Super Admin') return;
+
+    const remainingSuperAdmins = await User.countDocuments({
+        schoolId: user.schoolId,
+        _id: { $ne: user._id },
+        role: { $in: ['Super Admin', 'super_admin'] },
+    });
+
+    if (remainingSuperAdmins === 0) {
+        throw new AppError(`At least one Super Admin is required. You cannot ${actionLabel} the last Super Admin.`, 400);
+    }
 };
 
 const registerUser = async ({ input, actor }) => {
@@ -124,7 +136,7 @@ const registerUser = async ({ input, actor }) => {
     const schoolId = assertSchoolId(actor.schoolId);
     const normalizedRole = ROLE_MAP[String(role).trim().toLowerCase()];
     if (!normalizedRole) {
-        throw new AppError('Invalid staff role', 400);
+        throw new AppError('Invalid user role', 400);
     }
 
     ensureCanCreateRole(toClientRole(actor?.role), normalizedRole);
@@ -347,7 +359,7 @@ const getCurrentUserResponse = (user) => ({
 const getAllUsers = async ({ actor } = {}) => {
     const actorRole = toClientRole(actor?.role);
     const query = isAdminRole(actorRole)
-        ? tenantFilter(actor, { role: { $in: STAFF_ROLES } })
+        ? tenantFilter(actor, { role: { $in: ACCOUNT_USER_ROLES } })
         : tenantFilter(actor, { role: { $in: TEACHER_ROLES } });
     const users = await User.find(query).select('-password').lean();
     return users.map((user) => ({
@@ -363,7 +375,12 @@ const deleteUser = async ({ id, actor }) => {
         throw new AppError('Staff member not found', 404);
     }
 
+    if (String(user._id) === String(actor?._id || actor?.id || '')) {
+        throw new AppError('You cannot delete your own account.', 403);
+    }
+
     ensureCanManageUser(actor, user, 'delete');
+    await ensureAtLeastOneSuperAdminRemains({ user, nextRole: 'Deleted', actionLabel: 'delete' });
 
     await revokeUserSessions({ userId: user._id, type: 'staff' });
     await user.deleteOne();
@@ -377,6 +394,98 @@ const deleteUser = async ({ id, actor }) => {
     );
 
     return { message: 'Staff member removed' };
+};
+
+const updateUser = async ({ id, input, actor }) => {
+    const user = await User.findOne(tenantFilter(actor, { _id: id })).exec();
+
+    if (!user) {
+        throw new AppError('Staff member not found', 404);
+    }
+
+    const actorRole = toClientRole(actor?.role);
+    const actorId = String(actor?._id || actor?.id || '');
+    const targetId = String(user._id);
+    const isSelfUpdate = actorId && actorId === targetId;
+    const requestedRole = input.role ? ROLE_MAP[String(input.role).trim().toLowerCase()] : undefined;
+    const isRoleChange = requestedRole && requestedRole !== toClientRole(user.role);
+
+    if (isRoleChange && !EDITABLE_ROLES.includes(requestedRole)) {
+        throw new AppError('Invalid staff role', 400);
+    }
+
+    if (isSelfUpdate && isRoleChange) {
+        throw new AppError('You cannot change your own role.', 403);
+    }
+
+    if (!isSelfUpdate && actorRole !== 'Super Admin') {
+        throw new AppError('Only Super Admin can edit other users.', 403);
+    }
+
+    if (isRoleChange && actorRole !== 'Super Admin') {
+        throw new AppError('Only Super Admin can change user roles.', 403);
+    }
+
+    if (isRoleChange) {
+        await ensureAtLeastOneSuperAdminRemains({ user, nextRole: requestedRole, actionLabel: 'change the role of' });
+    }
+
+    const normalizedEmail = input.email ? String(input.email).trim().toLowerCase() : undefined;
+    if (normalizedEmail && normalizedEmail !== user.email) {
+        const emailExists = await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } }).select('_id').lean();
+        const workspaceEmailExists = await SchoolWorkspace.findOne({ email: normalizedEmail }).select('_id').lean();
+        if (emailExists || workspaceEmailExists) {
+            throw new AppError('Email already exists. Use a globally unique email address.', 400);
+        }
+        user.email = normalizedEmail;
+    }
+
+    if (input.name !== undefined) {
+        user.name = String(input.name || '').trim();
+    }
+
+    if (isRoleChange) {
+        user.role = requestedRole;
+    }
+
+    const shouldInvalidateSessions = user.isModified('email') || user.isModified('role');
+
+    if (shouldInvalidateSessions) {
+        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    }
+
+    await user.save();
+
+    if (shouldInvalidateSessions || !isSelfUpdate) {
+        await revokeUserSessions({ userId: user._id, type: 'staff' });
+    }
+
+    createLog(
+        isRoleChange ? 'USER_ROLE_UPDATED' : 'USER_PROFILE_UPDATED',
+        getActorId(actor),
+        'User',
+        user._id,
+        {
+            Name: user.name,
+            Email: user.email,
+            Role: user.role,
+            targetLabel: user.name,
+            selfUpdate: isSelfUpdate,
+        }
+    );
+
+    return {
+        message: 'User updated successfully',
+        user: {
+            id: user._id,
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: toClientRole(user.role),
+            schoolId: user.schoolId,
+            mustChangePassword: user.mustChangePassword,
+        },
+    };
 };
 
 const generateTemporaryPassword = () => {
@@ -545,6 +654,7 @@ module.exports = {
     loginUser,
     getCurrentUserResponse,
     getAllUsers,
+    updateUser,
     deleteUser,
     resetUserPassword,
     changeStaffPassword,

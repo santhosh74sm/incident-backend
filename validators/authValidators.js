@@ -16,6 +16,14 @@ const registerSchema = z.object({
     class: z.string().trim().max(40).optional().default(''),
 });
 
+const updateUserSchema = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    email: z.string().trim().email().max(254).optional(),
+    role: z.enum(['Admin', 'Teacher']).optional(),
+}).refine((data) => data.name !== undefined || data.email !== undefined || data.role !== undefined, {
+    message: 'At least one profile field is required',
+});
+
 const workspaceSchema = z.object({
     schoolName: z.string().trim().min(2).max(160),
     superAdminName: z.string().trim().min(1).max(120),
@@ -55,6 +63,7 @@ const changeStudentPasswordSchema = z
 
 module.exports = {
     registerSchema,
+    updateUserSchema,
     workspaceSchema,
     loginSchema,
     changeStudentPasswordSchema,

@@ -36,6 +36,7 @@ const { tenantFilter } = require('../utils/tenant');
 
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
+const OPERATIONAL_ROLES = ['Teacher', 'teacher'];
 const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
 const MAX_PROGRESS_LOGS = 500;
 const UNKNOWN_FILTER_LABEL = 'Unknown';
@@ -82,7 +83,7 @@ const canAccessIncident = (incident, user) => {
 
     const userId = toIdString(user.id || user._id);
 
-    if (user.role === 'Teacher') {
+    if (OPERATIONAL_ROLES.includes(user.role)) {
         return [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId);
     }
 
@@ -307,7 +308,7 @@ const buildIncidentDateRangeQuery = (startDateValue, endDateValue) => {
 const buildIncidentQuery = async (user, query) => {
     const baseConditions = [{ schoolId: user.schoolId }];
 
-    if (user.role === 'Teacher') {
+    if (OPERATIONAL_ROLES.includes(user.role)) {
         baseConditions.push({ $or: [{ reportedBy: user.id }, { assignedHandler: user.id }] });
     }
 
