@@ -29,6 +29,7 @@ const {
 } = require('./s3CleanupService');
 const { buildCaseReportDocx } = require('./reports/caseReportService');
 const { tenantFilter } = require('../utils/tenant');
+const { getCurrentAcademicYear, getAcademicYearQuery, validateAcademicYear } = require('./academicYearService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -186,6 +187,17 @@ const buildIncidentMetadata = (incident, extra = {}) => ({
     ...extra,
 });
 
+const getStudentSnapshotForAcademicYear = (student, academicYear) => {
+    const historyEntry = (student?.history || []).find((entry) => entry?.academicYear === academicYear);
+    return {
+        admissionNo: historyEntry?.admissionNo || student?.admissionNo || '',
+        name: historyEntry?.name || student?.name || '',
+        className: historyEntry?.className || student?.className || '',
+        section: historyEntry?.section || student?.section || '',
+        academicYear,
+    };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Query builder helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,6 +319,8 @@ const buildIncidentDateRangeQuery = (startDateValue, endDateValue) => {
 
 const buildIncidentQuery = async (user, query) => {
     const baseConditions = [{ schoolId: user.schoolId }];
+    const academicYear = getAcademicYearQuery(query?.academicYear);
+    if (academicYear) baseConditions.push({ academicYear });
 
     if (OPERATIONAL_ROLES.includes(user.role)) {
         baseConditions.push({ $or: [{ reportedBy: user.id }, { assignedHandler: user.id }] });
@@ -525,6 +539,9 @@ const dispatchIncidentCreatedNotifications = async (incidents, user) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createIncidents = async ({ body, files, user }) => {
+    const academicYear = body.academicYear
+        ? validateAcademicYear(body.academicYear)
+        : await getCurrentAcademicYear(user);
     let studentIds = [];
     try { studentIds = body.studentIds ? JSON.parse(body.studentIds) : []; } catch { studentIds = []; }
     const isBulkSubmission = Array.isArray(studentIds) && studentIds.length > 0;
@@ -572,8 +589,10 @@ const createIncidents = async ({ body, files, user }) => {
     const incidentsToInsert = [];
 
     for (const student of studentDetails) {
+        const studentSnapshot = getStudentSnapshotForAcademicYear(student, academicYear);
         incidentsToInsert.push({
             schoolId: user.schoolId,
+            academicYear,
             ...incidentData,
             title: body.category,
             incidentCategory: body.category,
@@ -584,11 +603,18 @@ const createIncidents = async ({ body, files, user }) => {
             approvedAt: isAdmin ? Date.now() : null,
             status: useManualTiming ? initialStatus : 'Open',
             evidence,
-            admissionNo: student.admissionNo,
+            admissionNo: studentSnapshot.admissionNo,
             student: student._id,
-            class: student.className || cls,
-            section: student.section || sec,
-            studentsInvolved: [student.name],
+            class: studentSnapshot.className || cls,
+            section: studentSnapshot.section || sec,
+            studentsInvolved: [studentSnapshot.name],
+            studentSnapshot: {
+                name: studentSnapshot.name,
+                admissionNo: studentSnapshot.admissionNo,
+                className: studentSnapshot.className || cls || '',
+                section: studentSnapshot.section || sec || '',
+                academicYear,
+            },
             ...(useManualTiming && {
                 openedAt: manualOpenedAt || Date.now(),
                 ...(manualInProgressAt && { progressAt: manualInProgressAt, inProgressAt: manualInProgressAt }),
@@ -612,6 +638,7 @@ const createIncidents = async ({ body, files, user }) => {
                     reportedBy: user.name,
                     isBulkSubmission,
                     batchCount: createdIncidents.length,
+                    academicYear,
                 })
             );
         });
@@ -1117,6 +1144,8 @@ const processExcelUpload = async (filePath, user, body) => {
                 name: s.name,
                 className: s.className,
                 section: s.section,
+                academicYear: s.academicYear,
+                history: s.history || [],
             }))
         ),
         findByFieldRegexSet(User, 'email', emailSet, user.schoolId).then((rows) =>
@@ -1141,6 +1170,49 @@ const processExcelUpload = async (filePath, user, body) => {
     const incidents = [];
     const errors = [];
     const validationResults = { totalRows: data.length, successRows: 0, failedRows: 0, errors: [] };
+    const currentAcademicYear = await getCurrentAcademicYear(user);
+    const uploadAcademicYear = body?.academicYear
+        ? validateAcademicYear(body.academicYear)
+        : currentAcademicYear;
+
+    if (Number(uploadAcademicYear.slice(0, 4)) > Number(currentAcademicYear.slice(0, 4))) {
+        const err = new Error(`Academic Year cannot be greater than the current school academic year (${currentAcademicYear}).`);
+        err.statusCode = 400;
+        err.errors = [err.message];
+        err.validationResults = {
+            ...validationResults,
+            failedRows: data.length,
+            errors: [{ row: 'Upload', reason: err.message, column: 'academicYear' }],
+        };
+        throw err;
+    }
+
+    for (let i = 0; i < data.length; i++) {
+        const row = data[i];
+        const rowNum = i + 2;
+        let rowAcademicYearValue = '';
+        for (const key of Object.keys(row)) {
+            const keyLower = key.toLowerCase().trim();
+            if (keyLower === 'academicyear' || keyLower === 'academic year' || keyLower.startsWith('academicyear') || keyLower.startsWith('academic year')) {
+                rowAcademicYearValue = row[key]?.toString().trim() || '';
+                break;
+            }
+        }
+        if (!rowAcademicYearValue) continue;
+        const rowAcademicYear = validateAcademicYear(rowAcademicYearValue);
+        if (Number(rowAcademicYear.slice(0, 4)) > Number(currentAcademicYear.slice(0, 4))) {
+            const message = `Academic Year cannot be greater than the current school academic year (${currentAcademicYear}).`;
+            const err = new Error(message);
+            err.statusCode = 400;
+            err.errors = [`Row ${rowNum}: ${message}`];
+            err.validationResults = {
+                ...validationResults,
+                failedRows: data.length,
+                errors: [{ row: rowNum, reason: message, column: 'academicYear' }],
+            };
+            throw err;
+        }
+    }
 
     for (let i = 0; i < data.length; i++) {
         const row = data[i];
@@ -1176,6 +1248,17 @@ const processExcelUpload = async (filePath, user, body) => {
 
         const student = studentMap.get(admissionNumber) || studentMap.get(admissionNumber.toLowerCase());
         if (!student) { addFieldError('admissionNumber', `student "${admissionNumber}" not found`); continue; }
+        const rowAcademicYearValue = getCellValue('academicYear', 'academic year');
+        let incidentAcademicYear = uploadAcademicYear;
+        if (rowAcademicYearValue) {
+            try {
+                incidentAcademicYear = validateAcademicYear(rowAcademicYearValue);
+            } catch (error) {
+                addFieldError('academicYear', error.message);
+                continue;
+            }
+        }
+        const studentSnapshot = getStudentSnapshotForAcademicYear(student, incidentAcademicYear);
 
         const categoryInput = getCellValue('category');
         if (!categoryInput) { addFieldError('category', 'missing or empty'); continue; }
@@ -1183,16 +1266,18 @@ const processExcelUpload = async (filePath, user, body) => {
         if (!validCategory) { addFieldError('category', `invalid "${categoryInput}"`); continue; }
 
         const locationInput = getCellValue('location');
-        if (!locationInput) { addFieldError('location', 'missing or empty'); continue; }
-        const validLocation = locationMap.get(locationInput.toLowerCase());
-        if (!validLocation) { addFieldError('location', `invalid "${locationInput}"`); continue; }
+        let validLocation = '';
+        if (locationInput) {
+            validLocation = locationMap.get(locationInput.toLowerCase());
+            if (!validLocation) { addFieldError('location', `invalid "${locationInput}"`); continue; }
+        }
 
         const description = getCellValue('description');
-        if (!description) { addFieldError('description', 'missing or empty'); continue; }
 
         const evidenceTypeInput = getCellValue('evidenceType', 'evidenceType*', 'evidence', 'evidence_type');
-        if (!evidenceTypeInput) { addFieldError('evidenceType', 'missing or empty'); continue; }
-        const evidenceTypeNames = evidenceTypeInput.split(',').map((t) => t.trim());
+        const evidenceTypeNames = evidenceTypeInput
+            ? evidenceTypeInput.split(',').map((t) => t.trim()).filter(Boolean)
+            : [];
         const validEvidenceTypes = [];
         let hasInvalidEvidence = false;
         for (const typeName of evidenceTypeNames) {
@@ -1248,6 +1333,7 @@ const processExcelUpload = async (filePath, user, body) => {
 
         incidents.push({
             schoolId: user.schoolId,
+            academicYear: incidentAcademicYear,
             title: validCategory,
             category: validCategory,
             location: validLocation,
@@ -1262,10 +1348,17 @@ const processExcelUpload = async (filePath, user, body) => {
             isHighPriority,
             assignedHandler,
             evidence: validEvidenceTypes.map((type) => ({ evidenceType: type, fileUrl: null })),
-            studentsInvolved: [student.name],
-            class: student.className,
-            section: student.section,
-            admissionNo: student.admissionNo,
+            studentsInvolved: [studentSnapshot.name],
+            class: studentSnapshot.className,
+            section: studentSnapshot.section,
+            admissionNo: studentSnapshot.admissionNo,
+            studentSnapshot: {
+                name: studentSnapshot.name,
+                admissionNo: studentSnapshot.admissionNo,
+                className: studentSnapshot.className,
+                section: studentSnapshot.section,
+                academicYear: incidentAcademicYear,
+            },
         });
 
         validationResults.successRows++;
@@ -1347,6 +1440,7 @@ const processExcelUpload = async (filePath, user, body) => {
         summary: true,
         uploadType: 'Incident',
         routePath: '/upload-incidents',
+        academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
     });
 
     // Notify admins via SSE
@@ -1397,7 +1491,7 @@ const buildDownloadTemplate = async (format = 'xlsx', user) => {
     ]);
 
     const templateData = [
-        ['admissionNumber*', 'category*', 'location*', 'description*', 'evidenceType*', 'handledBy', 'day*', 'month*', 'year*', 'hour*', 'minute*', 'timePeriod (AM/PM)', 'highPriority (Yes/No)'],
+        ['admissionNumber*', 'category*', 'location', 'description', 'evidenceType', 'handledBy', 'day*', 'month*', 'year*', 'hour*', 'minute*', 'timePeriod (AM/PM)', 'highPriority (Yes/No)'],
         [students[0]?.admissionNo || '21295', categories[0]?.name || 'Argument', locations[0]?.name || 'Class', 'Student was involved in an argument during class time', evidenceTypes[0]?.name || 'Parent Letter', users.find((u) => isAdministrationRole(u.role))?.email || 'teacher@school.edu', '9', '3', '2026', '10', '30', 'AM', 'No'],
         [students[1]?.admissionNo || '21296', categories[1]?.name || 'Bullying', locations[1]?.name || 'Playground', 'Student was found bullying another student during recess', evidenceTypes[1]?.name || 'Warning Letter', users.find((u) => isAdministrationRole(u.role))?.email || 'teacher@school.edu', '10', '3', '2026', '2', '45', 'PM', 'Yes'],
         ['', '', '', '', '', '', '', '', '', '', '', '', ''],

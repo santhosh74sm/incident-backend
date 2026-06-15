@@ -21,6 +21,7 @@ const progressSchema = new mongoose.Schema(
 const bulkDeleteLogSchema = new mongoose.Schema(
     {
         schoolId: { type: String, required: true, uppercase: true, trim: true, index: true },
+        academicYear: { type: String, trim: true, index: true },
         user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
         module: { type: String, enum: ['students', 'incidents', 'issued-letters'], required: true, index: true },
         mode: { type: String, enum: ['filtered', 'all'], required: true, index: true },
@@ -34,6 +35,7 @@ const bulkDeleteLogSchema = new mongoose.Schema(
 );
 
 bulkDeleteLogSchema.index({ schoolId: 1, createdAt: -1 });
+bulkDeleteLogSchema.index({ schoolId: 1, academicYear: 1, createdAt: -1 });
 bulkDeleteLogSchema.index({ schoolId: 1, module: 1, createdAt: -1 });
 
 module.exports = mongoose.model('BulkDeleteLog', bulkDeleteLogSchema);

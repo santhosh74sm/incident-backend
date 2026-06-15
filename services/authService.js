@@ -8,6 +8,11 @@ const { createLog } = require('../utils/logger');
 const { revokeUserSessions } = require('./sessionService');
 const AppError = require('../utils/AppError');
 const { assertSchoolId, tenantFilter } = require('../utils/tenant');
+const {
+    validateAcademicYear,
+    getAcademicYearSummary,
+    changeAcademicYear,
+} = require('./academicYearService');
 
 const ROLE_MAP = {
     'super admin': 'Super Admin',
@@ -197,6 +202,7 @@ const registerUser = async ({ input, actor }) => {
 
 const createWorkspace = async ({ input }) => {
     const { schoolName, superAdminName, email, password } = input;
+    const academicYear = validateAcademicYear(input.academicYear);
     if (!isStrongPassword(password)) {
         throw new AppError(PASSWORD_POLICY_MESSAGE, 400);
     }
@@ -220,6 +226,7 @@ const createWorkspace = async ({ input }) => {
                 superAdminName: superAdminName.trim(),
                 email: normalizedEmail,
                 status: 'active',
+                currentAcademicYear: academicYear,
             }], { session });
 
             const salt = await bcrypt.genSalt(12);
@@ -259,6 +266,7 @@ const createWorkspace = async ({ input }) => {
             role: toClientRole(createdUser.role),
             schoolId: createdUser.schoolId,
             schoolName: workspace.schoolName,
+            currentAcademicYear: workspace.currentAcademicYear,
             mustChangePassword: false,
         },
     };
@@ -287,6 +295,7 @@ const loginStaff = async ({ email, password }) => {
             email: user.email,
             role: toClientRole(user.role),
             schoolId: user.schoolId,
+            currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
             mustChangePassword: user.mustChangePassword,
         },
         tokenType: 'staff',
@@ -328,6 +337,7 @@ const loginStudent = async ({ email, password, schoolId }) => {
             role: 'Student',
             admissionNo: student.admissionNo,
             schoolId: student.schoolId,
+            currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(student),
             mustChangePassword: student.mustChangePassword,
         },
         tokenType: 'student',
@@ -346,13 +356,14 @@ const loginUser = async ({ email, password, loginType, schoolId }) => {
     throw new AppError('Login type not specified', 400);
 };
 
-const getCurrentUserResponse = (user) => ({
+const getCurrentUserResponse = async (user) => ({
     id: user._id || user.id,
     name: user.name,
     email: user.email,
     role: toClientRole(user.role),
     schoolId: user.schoolId,
     admissionNo: user.admissionNo,
+    currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
     mustChangePassword: user.mustChangePassword,
 });
 
@@ -659,5 +670,7 @@ module.exports = {
     resetUserPassword,
     changeStaffPassword,
     changeStudentPassword,
+    getAcademicYearSummary,
+    changeAcademicYear,
 };
 

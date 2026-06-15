@@ -54,6 +54,15 @@ const errorHandler = (err, req, res, next) => {
         payload.errors = validationErrors;
     }
 
+    if (statusCode === 400 && Array.isArray(err.errors)) {
+        payload.errors = err.errors;
+    }
+
+    if (statusCode === 400 && Array.isArray(err.failedRows)) {
+        payload.failedRows = err.failedRows;
+        payload.failedCount = err.failedCount ?? err.failedRows.length;
+    }
+
     if (!isProduction && statusCode >= 500) {
         payload.stack = err.stack;
     }

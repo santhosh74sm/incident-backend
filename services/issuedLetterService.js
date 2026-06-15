@@ -11,7 +11,6 @@ const path = require('path');
 const IssuedLetter = require('../models/IssuedLetter');
 const LetterTemplate = require('../models/LetterTemplate');
 const Incident = require('../models/Incident');
-const Student = require('../models/Student');
 
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
@@ -21,6 +20,7 @@ const s3StorageService = require('./s3StorageService');
 const { deleteS3ObjectOrThrow } = require('./s3CleanupService');
 const { escapeXmlText, validateDocxBuffer } = require('../utils/docxSecurity');
 const { tenantFilter, schoolScopedKey } = require('../utils/tenant');
+const { getAcademicYearQuery } = require('./academicYearService');
 
 const ADMIN_ROLES = new Set(['Super Admin', 'Admin', 'super_admin', 'admin']);
 const OPERATIONAL_ROLES = new Set(['Teacher', 'teacher']);
@@ -227,15 +227,6 @@ const buildIncidentLetterData = async (incident) => {
         principalName: process.env.PRINCIPAL_NAME || 'Principal',
     };
 
-    if (incident.admissionNo) {
-        const student = await Student.findOne({ schoolId: incident.schoolId, admissionNo: incident.admissionNo }).lean();
-        if (student) {
-            studentData.studentName = student.name || studentData.studentName;
-            studentData.class = student.className || studentData.class;
-            studentData.section = student.section || studentData.section;
-        }
-    }
-
     return buildPlaceholderData(studentData);
 };
 
@@ -314,6 +305,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         const letterNumber = await IssuedLetter.generateLetterNumber(incident.schoolId);
         const issuedLetter = new IssuedLetter({
             schoolId: incident.schoolId,
+            academicYear: incident.academicYear || '',
             letterNumber,
             incident: incident._id,
             studentName: studentData.studentName,
@@ -346,6 +338,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
                         format: 'DOCX',
                         incidentId: incident._id,
                         letterNumber,
+                        academicYear: incident.academicYear || '',
                     }
                 );
             } catch {
@@ -416,6 +409,8 @@ const buildIncidentTimelineDateQuery = (startDateValue, endDateValue) => {
 
 const buildLetterQuery = async (query) => {
     const builtQuery = { schoolId: query.schoolId };
+    const academicYear = getAcademicYearQuery(query.academicYear);
+    if (academicYear) builtQuery.academicYear = academicYear;
 
     const studentName = String(query.studentName || query.student || '').trim();
     if (studentName) {
@@ -533,6 +528,8 @@ const getLettersByStudent = async (admissionNo, query, user) => {
     }
 
     const letterQuery = { admissionNo };
+    const academicYear = getAcademicYearQuery(query.academicYear);
+    if (academicYear) letterQuery.academicYear = academicYear;
     const incidentDateQuery = buildIncidentTimelineDateQuery(
         query.fromDate || query.startDate,
         query.toDate || query.endDate
@@ -670,10 +667,11 @@ const deleteIssuedLetter = async (id, user) => {
 };
 
 const getLetterFilterOptions = async (user) => {
-    const [classes, sections, categories] = await Promise.all([
+    const [classes, sections, categories, academicYears] = await Promise.all([
         IssuedLetter.distinct('className', tenantFilter(user)),
         IssuedLetter.distinct('section', tenantFilter(user)),
         IssuedLetter.distinct('incidentCategory', tenantFilter(user)),
+        IssuedLetter.distinct('academicYear', tenantFilter(user)),
     ]);
 
     return {
@@ -685,6 +683,7 @@ const getLetterFilterOptions = async (user) => {
         }),
         sections: sections.filter(Boolean).sort(),
         categories: categories.filter(Boolean).sort(),
+        academicYears: academicYears.filter(Boolean).sort(),
     };
 };
 

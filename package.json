@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "migrate:templates": "node scripts/migrateTemplates.js",
+    "migrate:academic-years": "node scripts/backfillAcademicYears.js",
     "migrate:indexes": "node scripts/createIndexes.js",
     "migrate:refresh-token-indexes": "node scripts/syncRefreshTokenIndexes.js --apply",
     "audit:refresh-token-indexes": "node scripts/syncRefreshTokenIndexes.js",

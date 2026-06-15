@@ -72,8 +72,12 @@ const loginUser = async (req, res, next) => {
     }
 };
 
-const getMe = async (req, res) => {
-    res.json(authService.getCurrentUserResponse(req.user));
+const getMe = async (req, res, next) => {
+    try {
+        res.json(await authService.getCurrentUserResponse(req.user));
+    } catch (error) {
+        next(error);
+    }
 };
 
 const getCsrf = async (req, res) => {
@@ -87,7 +91,7 @@ const refreshSession = async (req, res, next) => {
             req,
         });
         setSessionCookies(res, session);
-        res.json(authService.getCurrentUserResponse(session.user));
+        res.json(await authService.getCurrentUserResponse(session.user));
     } catch (error) {
         if (error.code !== 'REFRESH_RETRY_GRACE') {
             clearSessionCookies(res);
@@ -193,6 +197,25 @@ const resetUserPassword = async (req, res, next) => {
     }
 };
 
+const getAcademicYears = async (req, res, next) => {
+    try {
+        res.json(await authService.getAcademicYearSummary(req.user));
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updateAcademicYear = async (req, res, next) => {
+    try {
+        res.json(await authService.changeAcademicYear({
+            actor: req.user,
+            academicYear: req.body.academicYear,
+        }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getAdminExists,
     registerUser,
@@ -208,4 +231,6 @@ module.exports = {
     resetUserPassword,
     changeStaffPassword,
     changeStudentPassword,
+    getAcademicYears,
+    updateAcademicYear,
 };

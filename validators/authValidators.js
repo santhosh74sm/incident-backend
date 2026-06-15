@@ -28,6 +28,7 @@ const workspaceSchema = z.object({
     schoolName: z.string().trim().min(2).max(160),
     superAdminName: z.string().trim().min(1).max(120),
     email: z.string().trim().email().max(254),
+    academicYear: z.string().trim().regex(/^\d{4}-\d{2}$/, 'Academic Year must use YYYY-YY format'),
     password: z.string()
         .min(PASSWORD_MIN_LENGTH, 'Password must be at least 8 characters')
         .max(200)
@@ -35,6 +36,10 @@ const workspaceSchema = z.object({
         .regex(/[A-Z]/, 'Password must include an uppercase letter')
         .regex(/\d/, 'Password must include a number')
         .regex(/[^A-Za-z0-9]/, 'Password must include a symbol'),
+});
+
+const academicYearSchema = z.object({
+    academicYear: z.string().trim().regex(/^\d{4}-\d{2}$/, 'Academic Year must use YYYY-YY format').optional(),
 });
 
 const loginSchema = z.object({
@@ -65,6 +70,7 @@ module.exports = {
     registerSchema,
     updateUserSchema,
     workspaceSchema,
+    academicYearSchema,
     loginSchema,
     changeStudentPasswordSchema,
 };

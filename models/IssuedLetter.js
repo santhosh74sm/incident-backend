@@ -14,6 +14,11 @@ const issuedLetterSchema = new mongoose.Schema({
         trim: true,
         index: true,
     },
+    academicYear: {
+        type: String,
+        trim: true,
+        index: true,
+    },
     incident: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Incident',
@@ -104,6 +109,7 @@ issuedLetterSchema.index({ schoolId: 1, incident: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, incidentCategory: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, status: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, generatedAt: -1 });
+issuedLetterSchema.index({ schoolId: 1, academicYear: 1, generatedAt: -1 });
 
 const getExistingMaxLetterSequence = async (IssuedLetterModel, schoolId, year) => {
     const lastLetter = await IssuedLetterModel.findOne({

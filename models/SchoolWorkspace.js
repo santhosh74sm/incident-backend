@@ -34,6 +34,13 @@ const schoolWorkspaceSchema = new mongoose.Schema(
             default: 'active',
             index: true,
         },
+        currentAcademicYear: {
+            type: String,
+            required: true,
+            trim: true,
+            match: [/^\d{4}-\d{2}$/, 'Academic Year must use YYYY-YY format.'],
+            index: true,
+        },
     },
     { timestamps: true }
 );

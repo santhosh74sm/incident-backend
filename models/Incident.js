@@ -10,6 +10,7 @@ const incidentSchema = new mongoose.Schema(
             trim: true,
             index: true,
         },
+        academicYear: { type: String, trim: true, index: true },
         title: { type: String, required: true },
         description: { type: String },
         evidence: [
@@ -46,6 +47,13 @@ const incidentSchema = new mongoose.Schema(
         admissionNo: { type: String, index: true },
         class: { type: String, alias: 'className' },
         section: { type: String },
+        studentSnapshot: {
+            name: { type: String, default: '' },
+            admissionNo: { type: String, default: '' },
+            className: { type: String, default: '' },
+            section: { type: String, default: '' },
+            academicYear: { type: String, default: '' },
+        },
         student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', index: true },
         reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
         assignedHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -75,9 +83,9 @@ const incidentSchema = new mongoose.Schema(
 );
 
 // Compound indexes for the most common query patterns
-incidentSchema.index({ schoolId: 1, isHighPriority: 1, status: 1 });
-incidentSchema.index({ schoolId: 1, admissionNo: 1, status: 1 });
-incidentSchema.index({ schoolId: 1, student: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, academicYear: 1, isHighPriority: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, academicYear: 1, admissionNo: 1, status: 1 });
+incidentSchema.index({ schoolId: 1, academicYear: 1, student: 1, status: 1 });
 incidentSchema.index({ schoolId: 1, reportedBy: 1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, class: 1, section: 1 });
 incidentSchema.index({ schoolId: 1, status: 1, createdAt: -1 });
@@ -86,5 +94,6 @@ incidentSchema.index({ schoolId: 1, approvalStatus: 1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, incidentDate: -1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, category: 1, status: 1 });
 incidentSchema.index({ schoolId: 1, location: 1 });
+incidentSchema.index({ schoolId: 1, academicYear: 1, incidentDate: -1, createdAt: -1 });
 
 module.exports = mongoose.model('Incident', incidentSchema);

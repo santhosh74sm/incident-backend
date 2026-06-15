@@ -2,7 +2,6 @@
 
 const mongoose = require('mongoose');
 const Incident = require('../../models/Incident');
-const Student = require('../../models/Student');
 const { tenantFilter } = require('../../utils/tenant');
 const {
     DOCX_MIME_TYPE,
@@ -79,30 +78,10 @@ const buildReportFilename = ({ studentClass, studentSection, studentName, admiss
     ].join('_') + '.docx';
 
 const resolveStudentSnapshot = async (incident) => {
-    if (incident.student) {
-        return {
-            studentName: incident.student.name || 'N/A',
-            studentClass: incident.student.className || incident.class || '',
-            studentSection: incident.student.section || incident.section || '',
-        };
-    }
-
-    if (!incident.admissionNo) {
-        return {
-            studentName: 'N/A',
-            studentClass: incident.class || '',
-            studentSection: incident.section || '',
-        };
-    }
-
-    const student = await Student.findOne({ schoolId: incident.schoolId, admissionNo: incident.admissionNo })
-        .select('name className section')
-        .lean();
-
     return {
-        studentName: student?.name || 'N/A',
-        studentClass: student?.className || incident.class || '',
-        studentSection: student?.section || incident.section || '',
+        studentName: incident.studentSnapshot?.name || incident.studentsInvolved?.[0] || incident.student?.name || 'N/A',
+        studentClass: incident.studentSnapshot?.className || incident.class || '',
+        studentSection: incident.studentSnapshot?.section || incident.section || '',
     };
 };
 

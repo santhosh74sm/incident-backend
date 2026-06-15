@@ -12,6 +12,8 @@ const getBucketName = () => {
     return process.env.AWS_BUCKET_NAME;
 };
 
+const isConfigured = () => Boolean(process.env.AWS_BUCKET_NAME);
+
 const buildS3Url = (key) => {
     const bucket = getBucketName();
     const region = process.env.AWS_REGION;
@@ -125,5 +127,6 @@ module.exports = {
     getBuffer,
     getObjectStream,
     listKeysByPrefix,
+    isConfigured,
     uploadBuffer,
 };

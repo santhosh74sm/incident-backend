@@ -33,6 +33,28 @@ const studentSchema = new mongoose.Schema(
             trim: true,
             uppercase: true,
         },
+        academicYear: {
+            type: String,
+            trim: true,
+            index: true,
+        },
+        status: {
+            type: String,
+            enum: ['Active', 'Passed Out', 'Alumni'],
+            default: 'Active',
+            index: true,
+        },
+        history: [
+            {
+                academicYear: { type: String, required: true, trim: true },
+                admissionNo: { type: String, trim: true },
+                name: { type: String, trim: true },
+                className: { type: String, required: true, trim: true },
+                section: { type: String, required: true, trim: true, uppercase: true },
+                status: { type: String, enum: ['Active', 'Passed Out', 'Alumni'], default: 'Active' },
+                updatedAt: { type: Date, default: Date.now },
+            },
+        ],
         password: {
             type: String,
             select: false,
@@ -55,9 +77,10 @@ const studentSchema = new mongoose.Schema(
 
 // Compound indexes for fast class/section filtering and search
 studentSchema.index({ schoolId: 1, admissionNo: 1 }, { unique: true });
-studentSchema.index({ schoolId: 1, className: 1, section: 1 });
+studentSchema.index({ schoolId: 1, academicYear: 1, className: 1, section: 1 });
 studentSchema.index({ schoolId: 1, name: 1 });
-studentSchema.index({ schoolId: 1, className: 1 });
+studentSchema.index({ schoolId: 1, academicYear: 1 });
+studentSchema.index({ schoolId: 1, 'history.academicYear': 1 });
 
 // NOTE: Cascade incident deletion is handled explicitly in studentController.js
 // (deleteStudent) before calling student.deleteOne(). The pre-hook approach is

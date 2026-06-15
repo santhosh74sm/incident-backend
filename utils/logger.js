@@ -198,6 +198,9 @@ const createLog = (
 
             await Log.create({
                 schoolId,
+                academicYear: metadata.academicYear ||
+                    notificationConfig?.academicYear ||
+                    await require('../services/academicYearService').getCurrentAcademicYear(schoolId),
                 actionName,
                 performedBy: normalizedPerformedBy,
                 entityType,

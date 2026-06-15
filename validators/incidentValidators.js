@@ -4,7 +4,9 @@ const { objectId, optionalDateRangeQuerySchema, templateFormatQuerySchema } = re
 const optionalBoolean = z.union([z.boolean(), z.enum(['true', 'false'])]).optional();
 const optionalString = (max = 500) => z.coerce.string().trim().max(max).optional();
 
-const listIncidentsQuerySchema = optionalDateRangeQuerySchema;
+const listIncidentsQuerySchema = optionalDateRangeQuerySchema.extend({
+    academicYear: optionalString(20),
+}).passthrough();
 
 const approveAndAssignSchema = z.object({
     handlerId: objectId,
@@ -42,6 +44,7 @@ const createIncidentSchema = z.object({
     severity: optionalString(40),
     isHighPriority: optionalBoolean,
     highPriority: optionalString(20),
+    academicYear: optionalString(20),
     class: optionalString(40),
     section: optionalString(20),
     assignedHandler: optionalString(80),

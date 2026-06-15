@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const logSchema = new mongoose.Schema({
     schoolId: { type: String, required: true, uppercase: true, trim: true, index: true },
+    academicYear: { type: String, trim: true, index: true },
     actionName: { type: String, required: true, index: true }, 
     performedBy: { type: String, required: true, index: true }, // User ID or Name
     entityType: { type: String, enum: ['Incident', 'Student', 'Letter', 'Analytics', 'System', 'Bulk Upload', 'Template', 'Category', 'Location', 'EvidenceType', 'User', 'Staff'], required: true, index: true },
@@ -12,6 +13,7 @@ const logSchema = new mongoose.Schema({
 
 // Ensure high speed queries
 logSchema.index({ schoolId: 1, createdAt: -1 });
+logSchema.index({ schoolId: 1, academicYear: 1, createdAt: -1 });
 logSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 });
 logSchema.index({ schoolId: 1, entityType: 1, createdAt: -1 });
 logSchema.index({ schoolId: 1, actionName: 1, createdAt: -1 });

@@ -96,6 +96,8 @@ const deleteS3PrefixObjectsOrThrow = async (prefix, context = {}) => {
 };
 
 const getIncidentReportExportKeys = async (incidentIds, context = {}) => {
+    if (!s3StorageService.isConfigured()) return [];
+
     const ids = Array.isArray(incidentIds) ? incidentIds : [incidentIds];
     const keys = [];
 

@@ -9,6 +9,7 @@ const User = require('../models/User');
 const LetterTemplate = require('../models/LetterTemplate');
 const IssuedLetter = require('../models/IssuedLetter');
 const { getPagination, normalizePositiveNumber, buildPaginationMeta } = require('../utils/pagination');
+const { getAcademicYearQuery, getAcademicYearSummary } = require('./academicYearService');
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
@@ -261,10 +262,12 @@ const getLogs = async (query = {}, actor = null) => {
     const search = typeof query.search === 'string' ? query.search.trim() : '';
     const rawEntityType = typeof query.entityType === 'string' ? query.entityType : '';
     const entityTypes = rawEntityType.split(',').map((value) => value.trim()).filter(Boolean);
+    const academicYear = getAcademicYearQuery(query.academicYear);
     const createdAtRange = buildDateRange(query.startDate, query.endDate);
 
     const baseMatch = { schoolId: actor?.schoolId };
     if (entityTypes.length > 0) baseMatch.entityType = { $in: entityTypes };
+    if (academicYear) baseMatch.academicYear = academicYear;
     if (createdAtRange) baseMatch.createdAt = createdAtRange;
 
     const searchRegex = search ? new RegExp(escapeRegex(search), 'i') : null;
@@ -302,9 +305,10 @@ const getLogs = async (query = {}, actor = null) => {
         }
     );
 
-    const [result, entityTypeOptions] = await Promise.all([
+    const [result, entityTypeOptions, academicYearSummary] = await Promise.all([
         Log.aggregate(pipeline).allowDiskUse(false),
         Log.distinct('entityType', { schoolId: actor?.schoolId }),
+        getAcademicYearSummary(actor),
     ]);
 
     const logs = await resolveTargetLabels(result?.[0]?.data || []);
@@ -317,6 +321,8 @@ const getLogs = async (query = {}, actor = null) => {
         filters: {
             entityTypes: sortedEntityTypes,
             entityTypeOptions: buildEntityTypeOptions(sortedEntityTypes),
+            academicYears: academicYearSummary.academicYears || [],
+            currentAcademicYear: academicYearSummary.currentAcademicYear || '',
         },
     };
 };

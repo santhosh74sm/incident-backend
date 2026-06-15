@@ -15,6 +15,8 @@ const {
     refreshSession,
     changeStaffPassword,
     resetUserPassword,
+    getAcademicYears,
+    updateAcademicYear,
 } = require('../controllers/authController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
@@ -22,6 +24,7 @@ const {
     registerSchema,
     updateUserSchema,
     workspaceSchema,
+    academicYearSchema,
     loginSchema,
     changeStudentPasswordSchema,
 } = require('../validators/authValidators');
@@ -38,6 +41,8 @@ router.post('/login', authSensitiveRateLimiter, validate(loginSchema), loginUser
 router.post('/refresh', refreshSession);
 router.post('/logout', logoutUser);
 router.get('/me', protect, getMe);
+router.get('/academic-years', protect, getAcademicYears);
+router.put('/academic-year', protect, authorize('Super Admin'), validate(academicYearSchema), updateAcademicYear);
 // Student-specific auth routes
 router.post(
     '/student/change-password',

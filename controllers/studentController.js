@@ -29,6 +29,7 @@ const uploadStudents = async (req, res, next) => {
         const result = await studentService.uploadStudents({
             filePath: req.file?.path,
             actor: req.user,
+            uploadAcademicYear: req.body?.academicYear,
         });
         res.status(200).json(result);
     } catch (error) {

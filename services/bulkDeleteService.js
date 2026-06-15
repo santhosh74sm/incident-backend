@@ -11,6 +11,7 @@ const studentService = require('./studentService');
 const incidentService = require('./incidentService');
 const issuedLetterService = require('./issuedLetterService');
 const { tenantFilter } = require('../utils/tenant');
+const { getCurrentAcademicYear } = require('./academicYearService');
 
 const MODULES = new Set(['students', 'incidents', 'issued-letters']);
 const MODES = new Set(['filtered', 'all']);
@@ -34,13 +35,18 @@ const normalizeIds = (ids = []) =>
 const buildScopeQuery = (moduleName, payload = {}, actor) => {
     const mode = payload.mode || 'filtered';
     if (!MODES.has(mode)) throw new AppError('Invalid bulk delete mode.', 400);
-    if (mode === 'all') return tenantFilter(actor);
+    if (mode === 'all') {
+        return tenantFilter(actor, moduleName === 'students' ? { status: 'Active' } : {});
+    }
 
     const ids = normalizeIds(payload.ids);
     if (ids.length === 0) {
-        throw new AppError('Delete Filtered requires at least one record in scope.', 400);
+        throw new AppError(`${moduleName === 'students' ? 'Archive' : 'Delete'} Filtered requires at least one record in scope.`, 400);
     }
-    return tenantFilter(actor, { _id: { $in: ids } });
+    return tenantFilter(actor, {
+        _id: { $in: ids },
+        ...(moduleName === 'students' ? { status: 'Active' } : {}),
+    });
 };
 
 const getModel = (moduleName) => {
@@ -94,10 +100,9 @@ const previewStudents = async (payload, actor) => {
         mode: payload.mode,
         total: students.length,
         summary: {
-            students: students.length,
-            relatedIncidents: incidentSummary.incidentCount,
-            relatedEvidenceFiles: incidentSummary.evidenceFileCount,
-            relatedIssuedLetters: issuedLetterCount,
+            studentsToArchive: students.length,
+            preservedIncidents: incidentSummary.incidentCount,
+            preservedIssuedLetters: issuedLetterCount,
         },
     };
 };
@@ -160,9 +165,10 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
 
     const mode = payload.mode || 'filtered';
     const preview = await previewBulkDelete({ moduleName, payload, actor });
-    const requiredPhrase = preview.total >= 100 ? `DELETE ${preview.total}` : 'DELETE';
+    const actionWord = moduleName === 'students' ? 'ARCHIVE' : 'DELETE';
+    const requiredPhrase = preview.total >= 100 ? `${actionWord} ${preview.total}` : actionWord;
     if (String(payload.confirmation || '').trim() !== requiredPhrase) {
-        throw new AppError(`Type ${requiredPhrase} to confirm this bulk deletion.`, 400);
+        throw new AppError(`Type ${requiredPhrase} to confirm this bulk ${moduleName === 'students' ? 'archive' : 'deletion'}.`, 400);
     }
 
     const ids = (await getScopedIds(moduleName, payload, actor)).map((record) => String(record._id));
@@ -197,6 +203,7 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
     const durationMs = Date.now() - startedAt;
     const log = await BulkDeleteLog.create({
         schoolId: actor.schoolId,
+        academicYear: await getCurrentAcademicYear(actor),
         user: getActorId(actor),
         module: moduleName,
         mode,
@@ -213,9 +220,11 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
     return {
         module: moduleName,
         mode,
+        action: moduleName === 'students' ? 'archive' : 'delete',
         batchSize: BATCH_SIZE,
         requested: ids.length,
         deleted,
+        archived: moduleName === 'students' ? deleted : 0,
         failed: failures.length,
         failures,
         durationMs,
