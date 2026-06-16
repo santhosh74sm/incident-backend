@@ -76,15 +76,27 @@ const projectStudentForAcademicYear = (student, academicYear) => {
     if (!academicYear || String(academicYear).toLowerCase() === 'all') return student;
     const historyEntry = getHistoryEntryForYear(student, academicYear);
     if (!historyEntry && student.academicYear !== academicYear) return null;
+    if (historyEntry) {
+        return {
+            ...student,
+            academicYear,
+            name: historyEntry.name ?? student.name,
+            admissionNo: historyEntry.admissionNo ?? student.admissionNo,
+            className: historyEntry.className ?? '',
+            section: historyEntry.section ?? '',
+            status: historyEntry.status ?? '',
+            selectedAcademicYear: academicYear,
+        };
+    }
 
     return {
         ...student,
         academicYear,
-        name: historyEntry?.name || student.name,
-        admissionNo: historyEntry?.admissionNo || student.admissionNo,
-        className: historyEntry?.className || student.className,
-        section: historyEntry?.section || student.section,
-        status: historyEntry?.status || student.status,
+        name: student.name,
+        admissionNo: student.admissionNo,
+        className: student.className,
+        section: student.section,
+        status: student.status,
         selectedAcademicYear: academicYear,
     };
 };
@@ -176,12 +188,48 @@ const buildStudentUpdateQueryForAcademicYear = ({ oldStudent, currentAcademicYea
     return { studentInput, update };
 };
 
-const getFilters = async (actor) => {
+const getFilters = async (actor, options = {}) => {
     const currentAcademicYear = await getCurrentAcademicYear(actor);
-    const [classes, sections] = await Promise.all([
-        Student.distinct('className', tenantFilter(actor, { academicYear: currentAcademicYear, status: 'Active' })),
-        Student.distinct('section', tenantFilter(actor, { academicYear: currentAcademicYear, status: 'Active' })),
-    ]);
+    const isAllYears = String(options.academicYear || '').trim().toLowerCase() === 'all';
+    const selectedAcademicYear = options.academicYear
+        ? getAcademicYearQuery(options.academicYear)
+        : currentAcademicYear;
+    const selectedStatus = normalizeStudentStatusFilter(options.status) || 'Active';
+    if (isAllYears) {
+        const students = await Student.find(tenantFilter(actor)).select('className section academicYear status history').lean();
+        const yearRecords = students.flatMap((student) => [
+            {
+                className: student.className,
+                section: student.section,
+                status: student.status,
+            },
+            ...(student.history || []).map((entry) => ({
+                className: entry?.className,
+                section: entry?.section,
+                status: entry?.status || 'Active',
+            })),
+        ]).filter((entry) => entry.status === selectedStatus);
+        const classes = Array.from(new Set(yearRecords.map((student) => student.className).filter(Boolean)));
+        const sections = Array.from(new Set(yearRecords.map((student) => student.section).filter(Boolean)));
+
+        return {
+            classes: classes.filter(Boolean).sort((a, b) => a - b),
+            sections: sections.filter(Boolean).sort(),
+            currentAcademicYear,
+        };
+    }
+
+    const { query } = buildStudentListQuery({
+        academicYear: selectedAcademicYear,
+        status: selectedStatus,
+        actor,
+    });
+    const students = (await Student.find(query).select('className section academicYear status history').lean())
+        .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
+        .filter(Boolean)
+        .filter((student) => student.status === selectedStatus);
+    const classes = Array.from(new Set(students.map((student) => student.className).filter(Boolean)));
+    const sections = Array.from(new Set(students.map((student) => student.section).filter(Boolean)));
 
     return {
         classes: classes.filter(Boolean).sort((a, b) => a - b),
@@ -202,9 +250,9 @@ const buildStudentListQuery = ({ className, section, search, status, academicYea
     const andConditions = [];
     const selectedAcademicYear = academicYear ? getAcademicYearQuery(academicYear) : null;
     const selectedStatus = normalizeStudentStatusFilter(status);
-    if (selectedStatus) {
+    if (selectedStatus && !selectedAcademicYear) {
         query.status = selectedStatus;
-    } else {
+    } else if (!selectedAcademicYear) {
         query.status = 'Active';
     }
     if (selectedAcademicYear) {
@@ -229,11 +277,11 @@ const buildStudentListQuery = ({ className, section, search, status, academicYea
         query.$and = andConditions;
     }
 
-    return { query, selectedAcademicYear };
+    return { query, selectedAcademicYear, selectedStatus };
 };
 
 const getStudentsByFilter = async ({ className, section, search, page, limit, status, academicYear, actor } = {}) => {
-    const { query, selectedAcademicYear } = buildStudentListQuery({
+    const { query, selectedAcademicYear, selectedStatus } = buildStudentListQuery({
         className,
         section,
         search,
@@ -247,6 +295,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
         return students
             .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
             .filter(Boolean)
+            .filter((student) => !selectedStatus || student.status === selectedStatus)
             .filter((student) => !className || student.className === className)
             .filter((student) => !section || student.section === section);
     }
@@ -255,6 +304,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
     const allStudents = (await Student.find(query).sort({ name: 1 }).lean())
         .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
         .filter(Boolean)
+        .filter((student) => !selectedStatus || student.status === selectedStatus)
         .filter((student) => !className || student.className === className)
         .filter((student) => !section || student.section === section);
     const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
@@ -272,7 +322,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
 
 const getAllStudents = async (query = {}, actor = null) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
-    const { query: scopedQuery, selectedAcademicYear } = buildStudentListQuery({
+    const { query: scopedQuery, selectedAcademicYear, selectedStatus } = buildStudentListQuery({
         status: query.status,
         academicYear: query.academicYear,
         actor,
@@ -281,13 +331,15 @@ const getAllStudents = async (query = {}, actor = null) => {
         const students = await Student.find(scopedQuery).sort({ name: 1 }).lean();
         return students
             .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-            .filter(Boolean);
+            .filter(Boolean)
+            .filter((student) => !selectedStatus || student.status === selectedStatus);
     }
 
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
     const allStudents = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
         .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter((student) => !selectedStatus || student.status === selectedStatus);
     const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
     const total = allStudents.length;
 

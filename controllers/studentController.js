@@ -2,7 +2,7 @@ const studentService = require('../services/studentService');
 
 const getFilters = async (req, res, next) => {
     try {
-        res.json(await studentService.getFilters(req.user));
+        res.json(await studentService.getFilters(req.user, req.query));
     } catch (error) {
         next(error);
     }

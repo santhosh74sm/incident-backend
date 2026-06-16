@@ -189,11 +189,29 @@ const buildIncidentMetadata = (incident, extra = {}) => ({
 
 const getStudentSnapshotForAcademicYear = (student, academicYear) => {
     const historyEntry = (student?.history || []).find((entry) => entry?.academicYear === academicYear);
+    if (historyEntry) {
+        return {
+            admissionNo: historyEntry.admissionNo ?? student?.admissionNo ?? '',
+            name: historyEntry.name ?? student?.name ?? '',
+            className: historyEntry.className ?? '',
+            section: historyEntry.section ?? '',
+            academicYear,
+        };
+    }
+    if (student?.academicYear && student.academicYear !== academicYear) {
+        return {
+            admissionNo: student?.admissionNo || '',
+            name: student?.name || '',
+            className: '',
+            section: '',
+            academicYear,
+        };
+    }
     return {
-        admissionNo: historyEntry?.admissionNo || student?.admissionNo || '',
-        name: historyEntry?.name || student?.name || '',
-        className: historyEntry?.className || student?.className || '',
-        section: historyEntry?.section || student?.section || '',
+        admissionNo: student?.admissionNo || '',
+        name: student?.name || '',
+        className: student?.className || '',
+        section: student?.section || '',
         academicYear,
     };
 };
@@ -428,11 +446,12 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
 
     const enhanced = incidents.map((incidentObj) => {
         if (incidentObj.student) {
+            const snapshot = getStudentSnapshotForAcademicYear(incidentObj.student, incidentObj.academicYear);
             incidentObj.studentDetails = {
-                name: incidentObj.student.name,
-                admissionNo: incidentObj.student.admissionNo,
-                className: incidentObj.student.className,
-                section: incidentObj.student.section,
+                name: snapshot.name,
+                admissionNo: snapshot.admissionNo,
+                className: snapshot.className,
+                section: snapshot.section,
             };
         } else if (incidentObj.admissionNo) {
             const student = studentByAdmissionNo.get(incidentObj.admissionNo);
@@ -440,11 +459,12 @@ const enrichIncidentsWithStudentDetails = async (incidents) => {
                 selfHealOps.push({
                     updateOne: { filter: { _id: incidentObj._id, schoolId: incidentObj.schoolId }, update: { $set: { student: student._id } } },
                 });
+                const snapshot = getStudentSnapshotForAcademicYear(student, incidentObj.academicYear);
                 incidentObj.studentDetails = {
-                    name: student.name,
-                    admissionNo: student.admissionNo,
-                    className: student.className,
-                    section: student.section,
+                    name: snapshot.name,
+                    admissionNo: snapshot.admissionNo,
+                    className: snapshot.className,
+                    section: snapshot.section,
                 };
             } else {
                 incidentObj.studentDetails = null;
@@ -674,7 +694,7 @@ const listIncidents = async ({ user, query }) => {
     let incidentQuery = Incident.find(builtQuery)
         .populate('reportedBy', 'name role')
         .populate('assignedHandler', 'name role')
-        .populate('student', 'name admissionNo className section')
+        .populate('student', 'name admissionNo className section academicYear status history')
         .sort({ incidentDate: -1, createdAt: -1 });
 
     // lean() skips Mongoose document hydration — significant memory + speed win for read-only list
@@ -773,11 +793,12 @@ const getIncidentById = async (id, user) => {
     const incidentObj = incident;
 
     if (incidentObj.student) {
+        const snapshot = getStudentSnapshotForAcademicYear(incidentObj.student, incidentObj.academicYear);
         incidentObj.studentDetails = {
-            name: incidentObj.student.name,
-            admissionNo: incidentObj.student.admissionNo,
-            className: incidentObj.student.className,
-            section: incidentObj.student.section,
+            name: snapshot.name,
+            admissionNo: snapshot.admissionNo,
+            className: snapshot.className,
+            section: snapshot.section,
         };
     } else if (incidentObj.admissionNo) {
         const student = await Student.findOne(tenantFilter(user, { admissionNo: incidentObj.admissionNo })).lean();
@@ -788,11 +809,12 @@ const getIncidentById = async (id, user) => {
                     error: err.message,
                 });
             });
+            const snapshot = getStudentSnapshotForAcademicYear(student, incidentObj.academicYear);
             incidentObj.studentDetails = {
-                name: student.name,
-                admissionNo: student.admissionNo,
-                className: student.className,
-                section: student.section,
+                name: snapshot.name,
+                admissionNo: snapshot.admissionNo,
+                className: snapshot.className,
+                section: snapshot.section,
             };
         } else {
             incidentObj.studentDetails = null;

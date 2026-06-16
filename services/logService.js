@@ -16,6 +16,13 @@ const MAX_LIMIT = 50;
 const DEFAULT_NOTIFICATION_LIMIT = 12;
 const MAX_NOTIFICATION_LIMIT = 25;
 
+const assertAuditLogAccess = (actor) => {
+    if (actor?.role === 'Super Admin') return;
+    const error = new Error('Only Super Admin can access activity logs.');
+    error.statusCode = 403;
+    throw error;
+};
+
 const NOTIFICATION_ENTITY_TYPES = {
     'Super Admin': ['Incident', 'Letter', 'Template', 'Student', 'Bulk Upload', 'Analytics', 'System', 'Category', 'Location', 'EvidenceType', 'User', 'Staff'],
     Admin: ['Incident', 'Letter', 'Template', 'Student', 'Bulk Upload', 'Analytics', 'System', 'Category', 'Location', 'EvidenceType', 'User', 'Staff'],
@@ -255,6 +262,7 @@ const buildLogEnrichmentStages = () => [
 ];
 
 const getLogs = async (query = {}, actor = null) => {
+    assertAuditLogAccess(actor);
     const { page, limit, skip } = getPagination(query, {
         defaultLimit: DEFAULT_LIMIT,
         maxLimit: MAX_LIMIT,
@@ -352,6 +360,7 @@ const getNotificationFeed = async ({ limit: rawLimit, role, actor }) => {
 };
 
 const clearLogs = async (actor) => {
+    assertAuditLogAccess(actor);
     await Log.deleteMany({ schoolId: actor?.schoolId });
     return { message: 'Activity history cleared.' };
 };
