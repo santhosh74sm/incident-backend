@@ -35,17 +35,19 @@ const normalizeIds = (ids = []) =>
 const buildScopeQuery = (moduleName, payload = {}, actor) => {
     const mode = payload.mode || 'filtered';
     if (!MODES.has(mode)) throw new AppError('Invalid bulk delete mode.', 400);
+    const studentStatus = ['Active', 'Passed Out'].includes(payload.status) ? payload.status : null;
+    const studentScope = moduleName === 'students' && studentStatus ? { status: studentStatus } : {};
     if (mode === 'all') {
-        return tenantFilter(actor, moduleName === 'students' ? { status: 'Active' } : {});
+        return tenantFilter(actor, studentScope);
     }
 
     const ids = normalizeIds(payload.ids);
     if (ids.length === 0) {
-        throw new AppError(`${moduleName === 'students' ? 'Archive' : 'Delete'} Filtered requires at least one record in scope.`, 400);
+        throw new AppError('Delete Filtered requires at least one record in scope.', 400);
     }
     return tenantFilter(actor, {
         _id: { $in: ids },
-        ...(moduleName === 'students' ? { status: 'Active' } : {}),
+        ...studentScope,
     });
 };
 
@@ -72,7 +74,7 @@ const summarizeIncidents = (incidents = []) => ({
 const previewStudents = async (payload, actor) => {
     const studentIds = (await getScopedIds('students', payload, actor)).map((student) => student._id);
     const students = studentIds.length
-        ? await Student.find(tenantFilter(actor, { _id: { $in: studentIds } })).select('admissionNo name').lean()
+        ? await Student.find(tenantFilter(actor, { _id: { $in: studentIds } })).select('admissionNo name academicYear status').lean()
         : [];
 
     const admissionNos = students.map((student) => student.admissionNo).filter(Boolean);
@@ -100,9 +102,10 @@ const previewStudents = async (payload, actor) => {
         mode: payload.mode,
         total: students.length,
         summary: {
-            studentsToArchive: students.length,
-            preservedIncidents: incidentSummary.incidentCount,
-            preservedIssuedLetters: issuedLetterCount,
+            studentsToDelete: students.length,
+            incidentsToDelete: incidentSummary.incidentCount,
+            issuedLettersToDelete: issuedLetterCount,
+            evidenceFiles: incidentSummary.evidenceFileCount,
         },
     };
 };
@@ -165,10 +168,10 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
 
     const mode = payload.mode || 'filtered';
     const preview = await previewBulkDelete({ moduleName, payload, actor });
-    const actionWord = moduleName === 'students' ? 'ARCHIVE' : 'DELETE';
+    const actionWord = 'DELETE';
     const requiredPhrase = preview.total >= 100 ? `${actionWord} ${preview.total}` : actionWord;
     if (String(payload.confirmation || '').trim() !== requiredPhrase) {
-        throw new AppError(`Type ${requiredPhrase} to confirm this bulk ${moduleName === 'students' ? 'archive' : 'deletion'}.`, 400);
+        throw new AppError(`Type ${requiredPhrase} to confirm this bulk deletion.`, 400);
     }
 
     const ids = (await getScopedIds(moduleName, payload, actor)).map((record) => String(record._id));
@@ -220,11 +223,10 @@ const executeBulkDelete = async ({ moduleName, payload, actor }) => {
     return {
         module: moduleName,
         mode,
-        action: moduleName === 'students' ? 'archive' : 'delete',
+        action: 'delete',
         batchSize: BATCH_SIZE,
         requested: ids.length,
         deleted,
-        archived: moduleName === 'students' ? deleted : 0,
         failed: failures.length,
         failures,
         durationMs,

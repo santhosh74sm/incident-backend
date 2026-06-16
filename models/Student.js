@@ -40,7 +40,7 @@ const studentSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['Active', 'Passed Out', 'Alumni'],
+            enum: ['Active', 'Passed Out'],
             default: 'Active',
             index: true,
         },
@@ -51,7 +51,7 @@ const studentSchema = new mongoose.Schema(
                 name: { type: String, trim: true },
                 className: { type: String, required: true, trim: true },
                 section: { type: String, required: true, trim: true, uppercase: true },
-                status: { type: String, enum: ['Active', 'Passed Out', 'Alumni'], default: 'Active' },
+                status: { type: String, enum: ['Active', 'Passed Out'], default: 'Active' },
                 updatedAt: { type: Date, default: Date.now },
             },
         ],
@@ -82,8 +82,8 @@ studentSchema.index({ schoolId: 1, name: 1 });
 studentSchema.index({ schoolId: 1, academicYear: 1 });
 studentSchema.index({ schoolId: 1, 'history.academicYear': 1 });
 
-// NOTE: Cascade incident deletion is handled explicitly in studentController.js
-// (deleteStudent) before calling student.deleteOne(). The pre-hook approach is
+// NOTE: Cascade student deletion is handled explicitly in studentService.js
+// before calling Student.deleteOne(). The pre-hook approach is
 // intentionally NOT used here because pre('deleteOne') does not receive the
 // document instance — making it unreliable for fetching the student's name
 // needed to match studentsInvolved. Keeping cascade logic in the controller

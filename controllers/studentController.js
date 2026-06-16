@@ -48,6 +48,17 @@ const deleteStudent = async (req, res, next) => {
     }
 };
 
+const previewStudentDelete = async (req, res, next) => {
+    try {
+        res.json(await studentService.previewStudentDelete({
+            studentId: req.params.id,
+            actor: req.user,
+        }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 const createStudent = async (req, res, next) => {
     try {
         const student = await studentService.createStudent({
@@ -86,6 +97,7 @@ module.exports = {
     getAllStudents,
     uploadStudents,
     deleteStudent,
+    previewStudentDelete,
     createStudent,
     updateStudent,
     getStudentBehavioralSummary,

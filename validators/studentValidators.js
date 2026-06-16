@@ -13,7 +13,7 @@ const studentSchema = z.object({
     className: z.coerce.string().trim().min(1).max(40),
     section: z.coerce.string().trim().min(1).max(20).transform((value) => value.toUpperCase()),
     academicYear: z.string().trim().regex(/^\d{4}-\d{2}$/, 'Academic Year must use YYYY-YY format').optional(),
-    status: z.enum(['Active', 'Passed Out', 'Alumni']).optional(),
+    status: z.enum(['Active', 'Passed Out']).optional(),
 });
 
 module.exports = {

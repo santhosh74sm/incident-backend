@@ -2,6 +2,7 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const Student = require('../models/Student');
 const Incident = require('../models/Incident');
+const IncidentReadState = require('../models/IncidentReadState');
 const IssuedLetter = require('../models/IssuedLetter');
 const Log = require('../models/Log');
 const Notification = require('../models/Notification');
@@ -189,11 +190,21 @@ const getFilters = async (actor) => {
     };
 };
 
-const buildStudentListQuery = ({ className, section, search, includeArchived, academicYear, actor } = {}) => {
+const normalizeStudentStatusFilter = (status) => {
+    const normalized = String(status || '').trim();
+    if (!normalized || normalized.toLowerCase() === 'all') return null;
+    if (normalized === 'Active' || normalized === 'Passed Out') return normalized;
+    return 'Active';
+};
+
+const buildStudentListQuery = ({ className, section, search, status, academicYear, actor } = {}) => {
     const query = tenantFilter(actor);
     const andConditions = [];
     const selectedAcademicYear = academicYear ? getAcademicYearQuery(academicYear) : null;
-    if (String(includeArchived || '').toLowerCase() !== 'true') {
+    const selectedStatus = normalizeStudentStatusFilter(status);
+    if (selectedStatus) {
+        query.status = selectedStatus;
+    } else {
         query.status = 'Active';
     }
     if (selectedAcademicYear) {
@@ -221,12 +232,12 @@ const buildStudentListQuery = ({ className, section, search, includeArchived, ac
     return { query, selectedAcademicYear };
 };
 
-const getStudentsByFilter = async ({ className, section, search, page, limit, includeArchived, academicYear, actor } = {}) => {
+const getStudentsByFilter = async ({ className, section, search, page, limit, status, academicYear, actor } = {}) => {
     const { query, selectedAcademicYear } = buildStudentListQuery({
         className,
         section,
         search,
-        includeArchived,
+        status,
         academicYear,
         actor,
     });
@@ -262,7 +273,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, in
 const getAllStudents = async (query = {}, actor = null) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
     const { query: scopedQuery, selectedAcademicYear } = buildStudentListQuery({
-        includeArchived: query.includeArchived,
+        status: query.status,
         academicYear: query.academicYear,
         actor,
     });
@@ -507,27 +518,168 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
     }
 };
 
+const getStudentDeleteImpact = async ({ student, actor }) => {
+    const schoolId = actor.schoolId;
+    const studentId = student._id;
+    const admissionNo = String(student.admissionNo || '').trim();
+    const studentName = String(student.name || '').trim();
+    const studentMatchConditions = [
+        { student: studentId },
+        ...(admissionNo ? [{ admissionNo }] : []),
+        ...(studentName ? [{ studentsInvolved: studentName }] : []),
+    ];
+    const incidentMatch = { schoolId, $or: studentMatchConditions };
+    const incidentIds = await Incident.find(incidentMatch).distinct('_id');
+    const letterMatch = {
+        schoolId,
+        $or: [
+            ...(admissionNo ? [{ admissionNo }] : []),
+            ...(incidentIds.length > 0 ? [{ incident: { $in: incidentIds } }] : []),
+        ],
+    };
+    const notificationMatch = {
+        schoolId,
+        $or: [
+            ...(incidentIds.length > 0 ? [{ incident: { $in: incidentIds } }] : []),
+            { entityId: String(studentId) },
+            ...(admissionNo ? [
+                { targetAdmissionNumber: admissionNo },
+                { 'studentDetails.admissionNo': admissionNo },
+                { routePath: `/student-analytics/${admissionNo}` },
+            ] : []),
+        ],
+    };
+    const logMatch = {
+        schoolId,
+        $or: [
+            { entityId: String(studentId) },
+            ...(admissionNo ? [
+                { 'metadata.targetAdmissionNumber': admissionNo },
+                { 'metadata.admissionNo': admissionNo },
+                { 'metadata.studentAdmissionNumber': admissionNo },
+                { 'metadata.studentDetails.admissionNo': admissionNo },
+                { 'metadata.routePath': `/student-analytics/${admissionNo}` },
+            ] : []),
+        ],
+    };
+
+    const [incidentCount, issuedLetterCount, notificationCount, logCount, readStateCount] = await Promise.all([
+        Incident.countDocuments(incidentMatch),
+        letterMatch.$or.length ? IssuedLetter.countDocuments(letterMatch) : 0,
+        notificationMatch.$or.length ? Notification.countDocuments(notificationMatch) : 0,
+        logMatch.$or.length ? Log.countDocuments(logMatch) : 0,
+        incidentIds.length ? IncidentReadState.countDocuments({ schoolId, incident: { $in: incidentIds } }) : 0,
+    ]);
+
+    return {
+        studentId,
+        admissionNo,
+        incidentIds,
+        incidentMatch,
+        letterMatch,
+        notificationMatch,
+        logMatch,
+        counts: {
+            students: 1,
+            incidents: incidentCount,
+            issuedLetters: issuedLetterCount,
+            notifications: notificationCount,
+            logs: logCount,
+            incidentReadStates: readStateCount,
+        },
+    };
+};
+
 const deleteStudent = async ({ studentId, actor }) => {
     const student = await Student.findOne(tenantFilter(actor, { _id: studentId })).lean();
     if (!student) {
         throw new AppError('Student not found', 404);
     }
 
-    await Student.findOneAndUpdate(
-        tenantFilter(actor, { _id: studentId }),
-        { status: student.className === '12' ? 'Passed Out' : 'Alumni' },
-        { runValidators: true }
-    );
+    const impact = await getStudentDeleteImpact({ student, actor });
+    const deleteOps = [
+        impact.incidentIds.length
+            ? IncidentReadState.deleteMany({ schoolId: actor.schoolId, incident: { $in: impact.incidentIds } })
+            : Promise.resolve({ deletedCount: 0 }),
+        impact.letterMatch.$or.length
+            ? IssuedLetter.deleteMany(impact.letterMatch)
+            : Promise.resolve({ deletedCount: 0 }),
+        impact.notificationMatch.$or.length
+            ? Notification.deleteMany(impact.notificationMatch)
+            : Promise.resolve({ deletedCount: 0 }),
+        impact.logMatch.$or.length
+            ? Log.deleteMany(impact.logMatch)
+            : Promise.resolve({ deletedCount: 0 }),
+        Incident.deleteMany(impact.incidentMatch),
+        Student.deleteOne(tenantFilter(actor, { _id: studentId })),
+    ];
+    const [
+        readStatesDeleted,
+        lettersDeleted,
+        notificationsDeleted,
+        logsDeleted,
+        incidentsDeleted,
+        studentsDeleted,
+    ] = await Promise.all(deleteOps);
 
     createLog(
-        'ADMIN_DELETE_USER',
+        'STUDENT_PERMANENTLY_DELETED',
         getActorId(actor),
-        'Student',
-        student._id,
-        { Name: student.name, 'Admission Number': student.admissionNo, Role: 'Student' }
+        'System',
+        null,
+        {
+            Name: student.name,
+            'Admission Number': student.admissionNo,
+            Role: 'Student',
+            targetLabel: student.name,
+            targetAdmissionNumber: student.admissionNo,
+            admissionNo: student.admissionNo,
+            academicYear: student.academicYear,
+            affectedRecords: impact.counts,
+            deletedRecords: {
+                students: studentsDeleted.deletedCount || 0,
+                incidents: incidentsDeleted.deletedCount || 0,
+                issuedLetters: lettersDeleted.deletedCount || 0,
+                notifications: notificationsDeleted.deletedCount || 0,
+                logs: logsDeleted.deletedCount || 0,
+                incidentReadStates: readStatesDeleted.deletedCount || 0,
+            },
+        }
     );
 
-    return { message: 'Student archived successfully.' };
+    return {
+        message: 'Student permanently deleted successfully.',
+        affectedRecords: impact.counts,
+        deletedRecords: {
+            students: studentsDeleted.deletedCount || 0,
+            incidents: incidentsDeleted.deletedCount || 0,
+            issuedLetters: lettersDeleted.deletedCount || 0,
+            notifications: notificationsDeleted.deletedCount || 0,
+            logs: logsDeleted.deletedCount || 0,
+            incidentReadStates: readStatesDeleted.deletedCount || 0,
+        },
+    };
+};
+
+const previewStudentDelete = async ({ studentId, actor }) => {
+    const student = await Student.findOne(tenantFilter(actor, { _id: studentId })).lean();
+    if (!student) {
+        throw new AppError('Student not found', 404);
+    }
+
+    const impact = await getStudentDeleteImpact({ student, actor });
+    return {
+        student: {
+            _id: student._id,
+            name: student.name,
+            admissionNo: student.admissionNo,
+            className: student.className,
+            section: student.section,
+            academicYear: student.academicYear,
+            status: student.status,
+        },
+        affectedRecords: impact.counts,
+    };
 };
 
 const createStudent = async ({ input, actor }) => {
@@ -881,8 +1033,16 @@ const updateStudent = async ({ studentId, input, actor }) => {
         oldSection: selectedYearBefore.section,
     });
 
+    const oldStatus = oldStudent.status;
+    const nextStatus = updatedStudent.status;
+    const statusAction = oldStatus === 'Passed Out' && nextStatus === 'Active'
+        ? 'STUDENT_REACTIVATED'
+        : oldStatus !== 'Passed Out' && nextStatus === 'Passed Out'
+            ? 'STUDENT_PASSED_OUT'
+            : 'STUDENT_UPDATED';
+
     createLog(
-        'STUDENT_UPDATED',
+        statusAction,
         getActorId(actor),
         'Student',
         updatedStudent._id,
@@ -890,6 +1050,8 @@ const updateStudent = async ({ studentId, input, actor }) => {
             Name: updatedStudent.name,
             'Admission Number': updatedStudent.admissionNo,
             academicYear: requestedAcademicYear,
+            previousStatus: oldStatus,
+            status: nextStatus,
         }
     );
 
@@ -901,6 +1063,7 @@ module.exports = {
     getStudentsByFilter,
     getAllStudents,
     uploadStudents,
+    previewStudentDelete,
     deleteStudent,
     createStudent,
     updateStudent,
@@ -913,5 +1076,6 @@ module.exports = {
         hasAcademicYearHistory,
         createUploadValidationError,
         syncStudentReferences,
+        getStudentDeleteImpact,
     },
 };

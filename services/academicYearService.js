@@ -132,7 +132,9 @@ const buildPromotionUpdateForStudent = (student, nextAcademicYear) => {
     };
 };
 
-const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademicYear, nextAcademicYear, session }) => {
+const getActorId = (actor) => actor?.id || actor?._id || 'System';
+
+const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademicYear, nextAcademicYear, actor, session }) => {
     let query = Student.find({
         schoolId,
         status: 'Active',
@@ -169,8 +171,26 @@ const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademic
         if (session) updateQuery = updateQuery.session(session);
         await updateQuery;
 
-        if (promotionUpdate.promotionTarget.isPassedOut) passedOut += 1;
-        else promoted += 1;
+        if (promotionUpdate.promotionTarget.isPassedOut) {
+            passedOut += 1;
+            createLog(
+                'STUDENT_PASSED_OUT',
+                getActorId(actor),
+                'Student',
+                student._id,
+                {
+                    Name: student.name,
+                    'Admission Number': student.admissionNo,
+                    targetLabel: student.name,
+                    targetAdmissionNumber: student.admissionNo,
+                    admissionNo: student.admissionNo,
+                    previousAcademicYear,
+                    academicYear: nextAcademicYear,
+                    previousStatus: student.status,
+                    status: 'Passed Out',
+                }
+            );
+        } else promoted += 1;
     }
 
     return { promoted, passedOut, skipped };
@@ -208,6 +228,7 @@ const changeAcademicYear = async ({ actor, academicYear }) => {
         schoolId,
         previousAcademicYear,
         nextAcademicYear,
+        actor,
     });
 
     createLog(
