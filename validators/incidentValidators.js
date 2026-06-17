@@ -32,6 +32,15 @@ const addEvidenceSchema = z.object({
     evidenceDetails: optionalString(5000),
 });
 
+const updateDescriptionSchema = z.object({
+    description: z.coerce.string().trim().max(3000).optional().default(''),
+});
+
+const evidenceParamSchema = z.object({
+    id: objectId,
+    evidenceId: objectId,
+});
+
 const createIncidentSchema = z.object({
     studentIds: optionalString(5000),
     studentsInvolved: optionalString(5000),
@@ -66,5 +75,7 @@ module.exports = {
     finalizeClosureSchema,
     rejectClosureSchema,
     addEvidenceSchema,
+    updateDescriptionSchema,
+    evidenceParamSchema,
     templateFormatQuerySchema,
 };

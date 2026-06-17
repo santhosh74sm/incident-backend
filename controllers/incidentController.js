@@ -289,6 +289,24 @@ const addIncidentEvidence = async (req, res, next) => {
     }
 };
 
+const deleteIncidentEvidence = async (req, res, next) => {
+    try {
+        const incident = await incidentService.deleteEvidence(req.params.id, req.params.evidenceId, req.user);
+        res.json({ message: 'Evidence deleted successfully', incident });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updateIncidentDescription = async (req, res, next) => {
+    try {
+        const incident = await incidentService.updateDescription(req.params.id, req.body.description, req.user);
+        res.json({ message: 'Description updated successfully', incident });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     createIncident,
     getIncidents,
@@ -305,4 +323,6 @@ module.exports = {
     downloadTemplate,
     exportIncidentReport,
     addIncidentEvidence,
+    deleteIncidentEvidence,
+    updateIncidentDescription,
 };

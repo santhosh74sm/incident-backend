@@ -38,9 +38,16 @@ const validate = (schema, source = 'body') => async (req, res, next) => {
             });
         }
 
+        const fieldErrors = result.error.flatten().fieldErrors;
+        const firstField = Object.keys(fieldErrors)[0];
+        const firstMessage = firstField ? fieldErrors[firstField]?.[0] : '';
+        const message = firstMessage
+            ? `${firstField}: ${firstMessage}`
+            : 'Please check the submitted fields and try again.';
+
         return res.status(400).json({
-            message: 'Validation failed',
-            errors: result.error.flatten().fieldErrors,
+            message,
+            errors: fieldErrors,
         });
     }
 

@@ -14,6 +14,10 @@ const { getPagination, buildPaginationMeta } = require('../utils/pagination');
 const { safeSheetToJson } = require('../utils/spreadsheetSecurity');
 const { tenantDoc, tenantFilter } = require('../utils/tenant');
 const { getCurrentAcademicYear, validateAcademicYear, getAcademicYearQuery } = require('./academicYearService');
+const {
+    deleteIncidentEvidenceFromS3OrThrow,
+    getIncidentEvidenceKeys,
+} = require('./s3CleanupService');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section', 'status'];
 
@@ -99,6 +103,76 @@ const projectStudentForAcademicYear = (student, academicYear) => {
         status: student.status,
         selectedAcademicYear: academicYear,
     };
+};
+
+const projectStudentRecordsForAcademicYear = (student, academicYear) => {
+    if (!academicYear || String(academicYear).toLowerCase() !== 'all') {
+        const projected = projectStudentForAcademicYear(student, academicYear);
+        return projected ? [projected] : [];
+    }
+
+    const recordsByYear = new Map();
+    (student?.history || []).forEach((entry) => {
+        if (!entry?.academicYear) return;
+        recordsByYear.set(entry.academicYear, {
+            ...student,
+            academicYear: entry.academicYear,
+            name: entry.name ?? student.name,
+            admissionNo: entry.admissionNo ?? student.admissionNo,
+            className: entry.className ?? '',
+            section: entry.section ?? '',
+            status: entry.status ?? student.status ?? 'Active',
+            selectedAcademicYear: entry.academicYear,
+        });
+    });
+
+    if (student?.academicYear && !recordsByYear.has(student.academicYear)) {
+        recordsByYear.set(student.academicYear, {
+            ...student,
+            selectedAcademicYear: student.academicYear,
+        });
+    }
+
+    return Array.from(recordsByYear.values());
+};
+
+const attachStudentSummaryCounts = async (students, actor, academicYear) => {
+    const rows = Array.isArray(students) ? students : [];
+    if (rows.length === 0) return rows;
+
+    const admissionNos = [...new Set(rows.map((student) => student?.admissionNo).filter(Boolean))];
+    if (admissionNos.length === 0) {
+        return rows.map((student) => ({ ...student, incidentCount: 0, letterCount: 0 }));
+    }
+
+    const isAllYears = String(academicYear || '').trim().toLowerCase() === 'all';
+    const yearScoped = !isAllYears && academicYear;
+    const baseMatch = { schoolId: actor.schoolId, admissionNo: { $in: admissionNos } };
+    const [incidentCounts, letterCounts] = await Promise.all([
+        Incident.aggregate([
+            { $match: yearScoped ? { ...baseMatch, academicYear } : baseMatch },
+            { $group: { _id: { admissionNo: '$admissionNo', academicYear: '$academicYear' }, count: { $sum: 1 } } },
+        ]),
+        IssuedLetter.aggregate([
+            { $match: yearScoped ? { ...baseMatch, academicYear } : baseMatch },
+            { $group: { _id: { admissionNo: '$admissionNo', academicYear: '$academicYear' }, count: { $sum: 1 } } },
+        ]),
+    ]);
+
+    const toKey = (admissionNo, year) => `${admissionNo || ''}::${year || ''}`;
+    const incidentMap = new Map();
+    const letterMap = new Map();
+    incidentCounts.forEach((entry) => incidentMap.set(toKey(entry._id?.admissionNo, entry._id?.academicYear), entry.count || 0));
+    letterCounts.forEach((entry) => letterMap.set(toKey(entry._id?.admissionNo, entry._id?.academicYear), entry.count || 0));
+
+    return rows.map((student) => {
+        const year = isAllYears ? student.academicYear : academicYear;
+        return {
+            ...student,
+            incidentCount: incidentMap.get(toKey(student.admissionNo, year)) || 0,
+            letterCount: letterMap.get(toKey(student.admissionNo, year)) || 0,
+        };
+    });
 };
 
 const createUploadValidationError = (failedRows = []) => {
@@ -197,18 +271,9 @@ const getFilters = async (actor, options = {}) => {
     const selectedStatus = normalizeStudentStatusFilter(options.status) || 'Active';
     if (isAllYears) {
         const students = await Student.find(tenantFilter(actor)).select('className section academicYear status history').lean();
-        const yearRecords = students.flatMap((student) => [
-            {
-                className: student.className,
-                section: student.section,
-                status: student.status,
-            },
-            ...(student.history || []).map((entry) => ({
-                className: entry?.className,
-                section: entry?.section,
-                status: entry?.status || 'Active',
-            })),
-        ]).filter((entry) => entry.status === selectedStatus);
+        const yearRecords = students
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, 'all'))
+            .filter((entry) => entry.status === selectedStatus);
         const classes = Array.from(new Set(yearRecords.map((student) => student.className).filter(Boolean)));
         const sections = Array.from(new Set(yearRecords.map((student) => student.section).filter(Boolean)));
 
@@ -248,11 +313,12 @@ const normalizeStudentStatusFilter = (status) => {
 const buildStudentListQuery = ({ className, section, search, status, academicYear, actor } = {}) => {
     const query = tenantFilter(actor);
     const andConditions = [];
+    const isAllYears = String(academicYear || '').trim().toLowerCase() === 'all';
     const selectedAcademicYear = academicYear ? getAcademicYearQuery(academicYear) : null;
     const selectedStatus = normalizeStudentStatusFilter(status);
-    if (selectedStatus && !selectedAcademicYear) {
+    if (selectedStatus && !selectedAcademicYear && !isAllYears) {
         query.status = selectedStatus;
-    } else if (!selectedAcademicYear) {
+    } else if (!selectedAcademicYear && !isAllYears) {
         query.status = 'Active';
     }
     if (selectedAcademicYear) {
@@ -293,8 +359,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
     if (!shouldPaginate) {
         const students = await Student.find(query).sort({ name: 1 }).lean();
         return students
-            .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-            .filter(Boolean)
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || academicYear))
             .filter((student) => !selectedStatus || student.status === selectedStatus)
             .filter((student) => !className || student.className === className)
             .filter((student) => !section || student.section === section);
@@ -302,8 +367,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
 
     const pagination = getPagination({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
     const allStudents = (await Student.find(query).sort({ name: 1 }).lean())
-        .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-        .filter(Boolean)
+        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || academicYear))
         .filter((student) => !selectedStatus || student.status === selectedStatus)
         .filter((student) => !className || student.className === className)
         .filter((student) => !section || student.section === section);
@@ -322,24 +386,29 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
 
 const getAllStudents = async (query = {}, actor = null) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
+    const includeSummaryCounts = String(query.includeSummaryCounts || query.summaryCounts || '').toLowerCase() === 'true';
     const { query: scopedQuery, selectedAcademicYear, selectedStatus } = buildStudentListQuery({
         status: query.status,
         academicYear: query.academicYear,
         actor,
     });
     if (!shouldPaginate) {
-        const students = await Student.find(scopedQuery).sort({ name: 1 }).lean();
-        return students
-            .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-            .filter(Boolean)
+        let students = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || query.academicYear))
             .filter((student) => !selectedStatus || student.status === selectedStatus);
+        if (includeSummaryCounts) {
+            students = await attachStudentSummaryCounts(students, actor, selectedAcademicYear || query.academicYear);
+        }
+        return students;
     }
 
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
-    const allStudents = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
-        .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-        .filter(Boolean)
+    let allStudents = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
+        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || query.academicYear))
         .filter((student) => !selectedStatus || student.status === selectedStatus);
+    if (includeSummaryCounts) {
+        allStudents = await attachStudentSummaryCounts(allStudents, actor, selectedAcademicYear || query.academicYear);
+    }
     const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
     const total = allStudents.length;
 
@@ -581,7 +650,12 @@ const getStudentDeleteImpact = async ({ student, actor }) => {
         ...(studentName ? [{ studentsInvolved: studentName }] : []),
     ];
     const incidentMatch = { schoolId, $or: studentMatchConditions };
-    const incidentIds = await Incident.find(incidentMatch).distinct('_id');
+    const relatedIncidents = await Incident.find(incidentMatch).select('_id evidence').lean();
+    const incidentIds = relatedIncidents.map((incident) => incident._id);
+    const evidenceFileCount = relatedIncidents.reduce(
+        (total, incident) => total + getIncidentEvidenceKeys(incident).length,
+        0
+    );
     const letterMatch = {
         schoolId,
         $or: [
@@ -615,8 +689,7 @@ const getStudentDeleteImpact = async ({ student, actor }) => {
         ],
     };
 
-    const [incidentCount, issuedLetterCount, notificationCount, logCount, readStateCount] = await Promise.all([
-        Incident.countDocuments(incidentMatch),
+    const [issuedLetterCount, notificationCount, logCount, readStateCount] = await Promise.all([
         letterMatch.$or.length ? IssuedLetter.countDocuments(letterMatch) : 0,
         notificationMatch.$or.length ? Notification.countDocuments(notificationMatch) : 0,
         logMatch.$or.length ? Log.countDocuments(logMatch) : 0,
@@ -627,13 +700,15 @@ const getStudentDeleteImpact = async ({ student, actor }) => {
         studentId,
         admissionNo,
         incidentIds,
+        relatedIncidents,
         incidentMatch,
         letterMatch,
         notificationMatch,
         logMatch,
         counts: {
             students: 1,
-            incidents: incidentCount,
+            incidents: relatedIncidents.length,
+            evidenceFiles: evidenceFileCount,
             issuedLetters: issuedLetterCount,
             notifications: notificationCount,
             logs: logCount,
@@ -649,30 +724,29 @@ const deleteStudent = async ({ studentId, actor }) => {
     }
 
     const impact = await getStudentDeleteImpact({ student, actor });
-    const deleteOps = [
-        impact.incidentIds.length
-            ? IncidentReadState.deleteMany({ schoolId: actor.schoolId, incident: { $in: impact.incidentIds } })
-            : Promise.resolve({ deletedCount: 0 }),
-        impact.letterMatch.$or.length
-            ? IssuedLetter.deleteMany(impact.letterMatch)
-            : Promise.resolve({ deletedCount: 0 }),
-        impact.notificationMatch.$or.length
-            ? Notification.deleteMany(impact.notificationMatch)
-            : Promise.resolve({ deletedCount: 0 }),
-        impact.logMatch.$or.length
-            ? Log.deleteMany(impact.logMatch)
-            : Promise.resolve({ deletedCount: 0 }),
-        Incident.deleteMany(impact.incidentMatch),
-        Student.deleteOne(tenantFilter(actor, { _id: studentId })),
-    ];
-    const [
-        readStatesDeleted,
-        lettersDeleted,
-        notificationsDeleted,
-        logsDeleted,
-        incidentsDeleted,
-        studentsDeleted,
-    ] = await Promise.all(deleteOps);
+    const evidenceDeleted = await deleteIncidentEvidenceFromS3OrThrow(impact.relatedIncidents, {
+        operation: 'deleteStudent',
+        schoolId: actor.schoolId,
+        studentId,
+        admissionNo: student.admissionNo,
+    });
+    const evidenceReferencesDeleted = impact.incidentIds.length
+        ? await Incident.updateMany(impact.incidentMatch, { $set: { evidence: [] } })
+        : { modifiedCount: 0 };
+    const readStatesDeleted = impact.incidentIds.length
+        ? await IncidentReadState.deleteMany({ schoolId: actor.schoolId, incident: { $in: impact.incidentIds } })
+        : { deletedCount: 0 };
+    const incidentsDeleted = await Incident.deleteMany(impact.incidentMatch);
+    const lettersDeleted = impact.letterMatch.$or.length
+        ? await IssuedLetter.deleteMany(impact.letterMatch)
+        : { deletedCount: 0 };
+    const notificationsDeleted = impact.notificationMatch.$or.length
+        ? await Notification.deleteMany(impact.notificationMatch)
+        : { deletedCount: 0 };
+    const logsDeleted = impact.logMatch.$or.length
+        ? await Log.deleteMany(impact.logMatch)
+        : { deletedCount: 0 };
+    const studentsDeleted = await Student.deleteOne(tenantFilter(actor, { _id: studentId }));
 
     createLog(
         'STUDENT_PERMANENTLY_DELETED',
@@ -691,6 +765,8 @@ const deleteStudent = async ({ studentId, actor }) => {
             deletedRecords: {
                 students: studentsDeleted.deletedCount || 0,
                 incidents: incidentsDeleted.deletedCount || 0,
+                evidenceFiles: evidenceDeleted.deletedKeys.length,
+                evidenceReferences: evidenceReferencesDeleted.modifiedCount ? impact.counts.evidenceFiles : 0,
                 issuedLetters: lettersDeleted.deletedCount || 0,
                 notifications: notificationsDeleted.deletedCount || 0,
                 logs: logsDeleted.deletedCount || 0,
@@ -705,6 +781,8 @@ const deleteStudent = async ({ studentId, actor }) => {
         deletedRecords: {
             students: studentsDeleted.deletedCount || 0,
             incidents: incidentsDeleted.deletedCount || 0,
+            evidenceFiles: evidenceDeleted.deletedKeys.length,
+            evidenceReferences: evidenceReferencesDeleted.modifiedCount ? impact.counts.evidenceFiles : 0,
             issuedLetters: lettersDeleted.deletedCount || 0,
             notifications: notificationsDeleted.deletedCount || 0,
             logs: logsDeleted.deletedCount || 0,

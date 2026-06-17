@@ -25,6 +25,8 @@ const {
     rejectClosure,
     exportIncidentReport,
     addIncidentEvidence,
+    deleteIncidentEvidence,
+    updateIncidentDescription,
 } = require('../controllers/incidentController');
 
 const incidentService = require('../services/incidentService');
@@ -43,6 +45,8 @@ const {
     finalizeClosureSchema,
     rejectClosureSchema,
     addEvidenceSchema,
+    updateDescriptionSchema,
+    evidenceParamSchema,
     templateFormatQuerySchema,
 } = require('../validators/incidentValidators');
 const { objectIdParamSchema } = require('../validators/commonValidators');
@@ -115,6 +119,7 @@ router.get('/:id/export-report', protect, validate(objectIdParamSchema, 'params'
 // ─── Workflow transitions (PUT — aligned with frontend apiClient) ─────────────
 router.put('/:id/approve', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(approveAndAssignSchema), approveAndAssign);
 router.put('/:id/progress', protect, validate(objectIdParamSchema, 'params'), validate(progressNoteSchema), addProgressNote);
+router.put('/:id/description', protect, validate(objectIdParamSchema, 'params'), validate(updateDescriptionSchema), updateIncidentDescription);
 router.put('/:id/request-closure', protect, validate(objectIdParamSchema, 'params'), validate(requestClosureSchema), requestClosure);
 router.put('/:id/finalize-closure', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(finalizeClosureSchema), finalizeClosure);
 router.put('/:id/reject-closure', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(rejectClosureSchema), rejectClosure);
@@ -130,6 +135,13 @@ router.put(
     validate(addEvidenceSchema),
     addIncidentEvidence,
     upload.cleanupUploadedS3OnError
+);
+
+router.delete(
+    '/:id/evidence/:evidenceId',
+    protect,
+    validate(evidenceParamSchema, 'params'),
+    deleteIncidentEvidence
 );
 
 module.exports = router;

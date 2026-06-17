@@ -2,19 +2,52 @@
 
 const logger = require('../utils/pinoLogger');
 const s3StorageService = require('./s3StorageService');
+const { decryptS3KeyToken } = require('../utils/protectedFileUrl');
 
 const extractS3KeyFromProtectedUrl = (fileUrl) => {
-    const marker = '/s3/';
     const value = String(fileUrl || '');
-    const markerIndex = value.indexOf(marker);
-    if (markerIndex === -1) return '';
+    if (!value) return '';
 
-    const key = value.slice(markerIndex + marker.length).split('?')[0].split('#')[0];
-    try {
-        return decodeURIComponent(key);
-    } catch {
-        return key;
+    const decodeKey = (key) => {
+        try {
+            return decodeURIComponent(key);
+        } catch {
+            return key;
+        }
+    };
+
+    const protectedMatch = value.match(/\/api\/uploads\/s3\/([^?#]+)/i);
+    if (protectedMatch) {
+        const tokenOrKey = decodeKey(protectedMatch[1]);
+        const decryptedKey = decryptS3KeyToken(tokenOrKey);
+        return decryptedKey || tokenOrKey;
     }
+
+    try {
+        const url = new URL(value);
+        const bucket = process.env.AWS_BUCKET_NAME;
+        const host = url.hostname.toLowerCase();
+        const pathKey = decodeKey(url.pathname.replace(/^\/+/, ''));
+
+        if (bucket && (
+            host === `${bucket}.s3.amazonaws.com` ||
+            host.startsWith(`${bucket}.s3.`) ||
+            host === 's3.amazonaws.com' ||
+            /^s3[.-][a-z0-9-]+\.amazonaws\.com$/.test(host)
+        )) {
+            if ((host === 's3.amazonaws.com' || /^s3[.-][a-z0-9-]+\.amazonaws\.com$/.test(host)) && pathKey.startsWith(`${bucket}/`)) {
+                return pathKey.slice(bucket.length + 1);
+            }
+            return pathKey;
+        }
+    } catch {
+    }
+
+    if (/^schools\/[^?#]+/i.test(value)) {
+        return decodeKey(value.split('?')[0].split('#')[0]);
+    }
+
+    return '';
 };
 
 const getIncidentEvidenceKeys = (incident) =>

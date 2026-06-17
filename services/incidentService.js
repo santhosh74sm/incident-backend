@@ -26,6 +26,8 @@ const { letterQueue, bulkQueue } = require('../utils/asyncQueue');
 const logger = require('../utils/pinoLogger');
 const {
     deleteIncidentFilesFromS3OrThrow,
+    deleteS3ObjectOrThrow,
+    extractS3KeyFromProtectedUrl,
 } = require('./s3CleanupService');
 const { buildCaseReportDocx } = require('./reports/caseReportService');
 const { tenantFilter } = require('../utils/tenant');
@@ -963,18 +965,38 @@ const requestClosure = async (incidentId, actionTaken, user) => {
     }
     assertIncidentMutationAccess(incident, user, 'request closure for');
 
+    const trimmedActionTaken = String(actionTaken || '').trim();
+    if (!trimmedActionTaken) {
+        const err = new Error('Action taken is required before requesting case closure.');
+        err.statusCode = 400;
+        throw err;
+    }
+
     incident.closureRequested = true;
-    incident.actionTaken = actionTaken;
+    incident.actionTaken = trimmedActionTaken;
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: 'CLOSURE REQUESTED: Investigation completed and submitted for final seal.', updatedBy: user.name, timestamp: Date.now() });
+    const closesImmediately = OPERATIONAL_ROLES.includes(user.role);
+    if (closesImmediately) {
+        const closedAt = Date.now();
+        incident.status = 'Closed';
+        incident.closedAt = closedAt;
+        incident.closedBy = user.id;
+        incident.closureRequested = false;
+        incident.rejectionReason = null;
+        incident.progressLogs.push({ note: `CASE CLOSED: ${trimmedActionTaken}`, updatedBy: user.name, timestamp: closedAt });
+    } else {
+        incident.progressLogs.push({ note: 'CLOSURE REQUESTED: Investigation completed and submitted for final seal.', updatedBy: user.name, timestamp: Date.now() });
+    }
 
     await incident.save();
 
-    createLog('Closure Requested', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { actionTaken: actionTaken || null, status: incident.status, closureRequested: true }), {
-        type: 'CLOSURE_REQUESTED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), recipientRoles: ['Super Admin', 'Admin'], message: `${user.name} requested closure for "${incident.title}".`,
+    createLog(closesImmediately ? 'Incident Closed' : 'Closure Requested', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { actionTaken: trimmedActionTaken, status: incident.status, closureRequested: incident.closureRequested, closedAt: incident.closedAt || null }), {
+        type: closesImmediately ? 'INCIDENT_CLOSED' : 'CLOSURE_REQUESTED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), recipientRoles: ['Super Admin', 'Admin'], message: closesImmediately ? `${user.name} closed "${incident.title}".` : `${user.name} requested closure for "${incident.title}".`,
     });
 
-    return { message: 'Closure requested' };
+    return closesImmediately
+        ? { message: 'Incident closed successfully', status: incident.status }
+        : { message: 'Closure requested' };
 };
 
 const finalizeClosure = async (incidentId, note, user) => {
@@ -1099,6 +1121,92 @@ const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {
     incident.progressLogs.push({ note: `ADDED NEW EVIDENCE: ${newEntries.length} items attached by ${user.name}.`, updatedBy: user.name, timestamp: Date.now() });
 
     await incident.save();
+    return incident;
+};
+
+const deleteEvidence = async (incidentId, evidenceId, user) => {
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
+    if (!incident) {
+        const err = new Error('Incident not found');
+        err.statusCode = 404;
+        throw err;
+    }
+    assertIncidentMutationAccess(incident, user, 'delete evidence from');
+
+    const evidenceEntry = incident.evidence.id(evidenceId);
+    if (!evidenceEntry) {
+        const err = new Error('Evidence record not found');
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const s3Key = extractS3KeyFromProtectedUrl(evidenceEntry.fileUrl);
+    if (s3Key) {
+        await deleteS3ObjectOrThrow(s3Key, {
+            operation: 'deleteIncidentEvidence',
+            incidentId,
+            evidenceId,
+            actorId: user?.id || user?._id,
+            schoolId: user?.schoolId,
+        });
+    }
+
+    const evidenceLabel = evidenceEntry.evidenceType || evidenceEntry.originalName || 'Evidence';
+    incident.evidence.pull(evidenceId);
+    trimProgressLogsBeforePush(incident);
+    incident.progressLogs.push({
+        note: `DELETED EVIDENCE: ${evidenceLabel} removed by ${user.name}.`,
+        updatedBy: user.name,
+        timestamp: Date.now(),
+    });
+
+    await incident.save();
+
+    createLog(
+        'Evidence Deleted',
+        user.id || user._id,
+        'Incident',
+        incident._id,
+        buildIncidentMetadata(incident, {
+            evidenceId,
+            evidenceType: evidenceLabel,
+            s3Key: s3Key || null,
+        })
+    );
+
+    return incident;
+};
+
+const updateDescription = async (incidentId, description, user) => {
+    const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
+    if (!incident) {
+        const err = new Error('Incident not found');
+        err.statusCode = 404;
+        throw err;
+    }
+    assertIncidentMutationAccess(incident, user, 'edit description for');
+
+    const nextDescription = String(description || '').trim();
+    if (incident.description === nextDescription) return incident;
+
+    incident.description = nextDescription;
+    trimProgressLogsBeforePush(incident);
+    incident.progressLogs.push({
+        note: 'INCIDENT DESCRIPTION UPDATED.',
+        updatedBy: user.name,
+        timestamp: Date.now(),
+    });
+
+    await incident.save();
+
+    createLog(
+        'Incident Description Updated',
+        user.id || user._id,
+        'Incident',
+        incident._id,
+        buildIncidentMetadata(incident, { editedBy: user.name, editedAt: new Date() })
+    );
+
     return incident;
 };
 
@@ -1572,6 +1680,8 @@ module.exports = {
     rejectClosure,
     deleteIncident,
     addEvidence,
+    deleteEvidence,
+    updateDescription,
     processExcelUpload,
     buildDownloadTemplate,
     buildCaseReportDocx,
