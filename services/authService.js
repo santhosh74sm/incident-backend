@@ -408,64 +408,109 @@ const deleteUser = async ({ id, actor }) => {
 };
 
 const updateUser = async ({ id, input, actor }) => {
-    const user = await User.findOne(tenantFilter(actor, { _id: id })).exec();
+    const session = await mongoose.startSession();
+    let user;
+    let isRoleChange = false;
+    let isSelfUpdate = false;
+    let shouldInvalidateSessions = false;
 
-    if (!user) {
-        throw new AppError('Staff member not found', 404);
+    try {
+        await session.withTransaction(async () => {
+            user = await User.findOne(tenantFilter(actor, { _id: id })).session(session).exec();
+
+            if (!user) {
+                throw new AppError('Staff member not found', 404);
+            }
+
+            const actorRole = toClientRole(actor?.role);
+            const actorId = String(actor?._id || actor?.id || '');
+            const targetId = String(user._id);
+            isSelfUpdate = actorId && actorId === targetId;
+            const requestedRole = input.role ? ROLE_MAP[String(input.role).trim().toLowerCase()] : undefined;
+            isRoleChange = requestedRole && requestedRole !== toClientRole(user.role);
+
+            if (isRoleChange && !EDITABLE_ROLES.includes(requestedRole)) {
+                throw new AppError('Invalid staff role', 400);
+            }
+
+            if (isSelfUpdate && isRoleChange) {
+                throw new AppError('You cannot change your own role.', 403);
+            }
+
+            if (!isSelfUpdate && actorRole !== 'Super Admin') {
+                throw new AppError('Only Super Admin can edit other users.', 403);
+            }
+
+            if (isRoleChange && actorRole !== 'Super Admin') {
+                throw new AppError('Only Super Admin can change user roles.', 403);
+            }
+
+            if (isRoleChange) {
+                await ensureAtLeastOneSuperAdminRemains({ user, nextRole: requestedRole, actionLabel: 'change the role of' });
+            }
+
+            const previousEmail = user.email;
+            const previousName = user.name;
+            const isSuperAdminAccount = toClientRole(user.role) === 'Super Admin';
+            const normalizedEmail = input.email ? String(input.email).trim().toLowerCase() : undefined;
+            if (normalizedEmail && normalizedEmail !== user.email) {
+                const [emailExists, workspaceEmailExists] = await Promise.all([
+                    User.findOne({ email: normalizedEmail, _id: { $ne: user._id } }).select('_id').session(session).lean(),
+                    SchoolWorkspace.findOne({
+                        email: normalizedEmail,
+                        schoolId: { $ne: user.schoolId },
+                    }).select('_id').session(session).lean(),
+                ]);
+                if (emailExists || workspaceEmailExists) {
+                    throw new AppError('Email already exists. Use a globally unique email address.', 400);
+                }
+                user.email = normalizedEmail;
+            }
+
+            const normalizedName = input.name !== undefined ? String(input.name || '').trim() : undefined;
+            if (normalizedName !== undefined) {
+                user.name = normalizedName;
+            }
+
+            if (isRoleChange) {
+                user.role = requestedRole;
+            }
+
+            shouldInvalidateSessions = user.isModified('email') || user.isModified('role');
+
+            if (shouldInvalidateSessions) {
+                user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+            }
+
+            await user.save({ session });
+
+            const workspaceSet = {};
+            if (normalizedEmail && normalizedEmail !== previousEmail) {
+                workspaceSet.email = normalizedEmail;
+            }
+            if (normalizedName !== undefined && normalizedName !== previousName) {
+                workspaceSet.superAdminName = normalizedName;
+            }
+
+            if (isSuperAdminAccount && Object.keys(workspaceSet).length > 0) {
+                const workspaceUpdate = await SchoolWorkspace.updateOne(
+                    {
+                        schoolId: user.schoolId,
+                    },
+                    {
+                        $set: workspaceSet,
+                    },
+                    { session }
+                );
+
+                if (workspaceUpdate.matchedCount !== 1) {
+                    throw new AppError('Could not synchronize Super Admin profile with the school workspace.', 500);
+                }
+            }
+        });
+    } finally {
+        await session.endSession();
     }
-
-    const actorRole = toClientRole(actor?.role);
-    const actorId = String(actor?._id || actor?.id || '');
-    const targetId = String(user._id);
-    const isSelfUpdate = actorId && actorId === targetId;
-    const requestedRole = input.role ? ROLE_MAP[String(input.role).trim().toLowerCase()] : undefined;
-    const isRoleChange = requestedRole && requestedRole !== toClientRole(user.role);
-
-    if (isRoleChange && !EDITABLE_ROLES.includes(requestedRole)) {
-        throw new AppError('Invalid staff role', 400);
-    }
-
-    if (isSelfUpdate && isRoleChange) {
-        throw new AppError('You cannot change your own role.', 403);
-    }
-
-    if (!isSelfUpdate && actorRole !== 'Super Admin') {
-        throw new AppError('Only Super Admin can edit other users.', 403);
-    }
-
-    if (isRoleChange && actorRole !== 'Super Admin') {
-        throw new AppError('Only Super Admin can change user roles.', 403);
-    }
-
-    if (isRoleChange) {
-        await ensureAtLeastOneSuperAdminRemains({ user, nextRole: requestedRole, actionLabel: 'change the role of' });
-    }
-
-    const normalizedEmail = input.email ? String(input.email).trim().toLowerCase() : undefined;
-    if (normalizedEmail && normalizedEmail !== user.email) {
-        const emailExists = await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } }).select('_id').lean();
-        const workspaceEmailExists = await SchoolWorkspace.findOne({ email: normalizedEmail }).select('_id').lean();
-        if (emailExists || workspaceEmailExists) {
-            throw new AppError('Email already exists. Use a globally unique email address.', 400);
-        }
-        user.email = normalizedEmail;
-    }
-
-    if (input.name !== undefined) {
-        user.name = String(input.name || '').trim();
-    }
-
-    if (isRoleChange) {
-        user.role = requestedRole;
-    }
-
-    const shouldInvalidateSessions = user.isModified('email') || user.isModified('role');
-
-    if (shouldInvalidateSessions) {
-        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-    }
-
-    await user.save();
 
     if (shouldInvalidateSessions || !isSelfUpdate) {
         await revokeUserSessions({ userId: user._id, type: 'staff' });
