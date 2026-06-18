@@ -194,7 +194,7 @@ const validateStudentUploadAcademicYear = (value, currentAcademicYear) => {
     return academicYear;
 };
 
-const buildStudentUpdateForAcademicYear = ({ academicYear, existingStudent, input }) => {
+const buildStudentUpdateForAcademicYear = ({ academicYear, currentAcademicYear = null, existingStudent, input }) => {
     const studentInput = normalizeStudentInput(input);
     const historyEntry = buildHistoryEntry({
         academicYear,
@@ -211,14 +211,25 @@ const buildStudentUpdateForAcademicYear = ({ academicYear, existingStudent, inpu
             ...(studentInput.name !== undefined ? { name: studentInput.name } : {}),
         }));
 
+    const update = {
+        history: identityCorrectedHistory,
+    };
+
+    if (studentInput.name !== undefined) update.name = studentInput.name;
+    if (studentInput.admissionNo !== undefined) update.admissionNo = studentInput.admissionNo;
+
+    const shouldUpdateMasterYearFields = !currentAcademicYear || academicYear === currentAcademicYear;
+    if (shouldUpdateMasterYearFields) {
+        if (studentInput.className !== undefined) update.className = studentInput.className;
+        if (studentInput.section !== undefined) update.section = studentInput.section;
+        if (studentInput.status !== undefined) update.status = studentInput.status;
+        update.academicYear = academicYear;
+    }
+
     return {
         academicYear,
         studentInput,
-        update: {
-            ...studentInput,
-            academicYear,
-            history: identityCorrectedHistory,
-        },
+        update,
     };
 };
 
@@ -327,8 +338,8 @@ const buildStudentListQuery = ({ className, section, search, status, academicYea
             { 'history.academicYear': selectedAcademicYear },
         ] });
     }
-    if (className && !selectedAcademicYear) query.className = className;
-    if (section && !selectedAcademicYear) query.section = section;
+    if (className && !selectedAcademicYear && !isAllYears) query.className = className;
+    if (section && !selectedAcademicYear && !isAllYears) query.section = section;
 
     if (search && search.trim()) {
         const searchTerm = search.trim();
@@ -347,19 +358,22 @@ const buildStudentListQuery = ({ className, section, search, status, academicYea
 };
 
 const getStudentsByFilter = async ({ className, section, search, page, limit, status, academicYear, actor } = {}) => {
+    const effectiveAcademicYear = academicYear !== undefined && academicYear !== null && academicYear !== ''
+        ? academicYear
+        : await getCurrentAcademicYear(actor);
     const { query, selectedAcademicYear, selectedStatus } = buildStudentListQuery({
         className,
         section,
         search,
         status,
-        academicYear,
+        academicYear: effectiveAcademicYear,
         actor,
     });
     const shouldPaginate = page !== undefined || limit !== undefined;
     if (!shouldPaginate) {
         const students = await Student.find(query).sort({ name: 1 }).lean();
         return students
-            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || academicYear))
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
             .filter((student) => !selectedStatus || student.status === selectedStatus)
             .filter((student) => !className || student.className === className)
             .filter((student) => !section || student.section === section);
@@ -367,7 +381,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
 
     const pagination = getPagination({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
     const allStudents = (await Student.find(query).sort({ name: 1 }).lean())
-        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || academicYear))
+        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
         .filter((student) => !selectedStatus || student.status === selectedStatus)
         .filter((student) => !className || student.className === className)
         .filter((student) => !section || student.section === section);
@@ -387,27 +401,30 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
 const getAllStudents = async (query = {}, actor = null) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
     const includeSummaryCounts = String(query.includeSummaryCounts || query.summaryCounts || '').toLowerCase() === 'true';
+    const effectiveAcademicYear = query.academicYear !== undefined && query.academicYear !== null && query.academicYear !== ''
+        ? query.academicYear
+        : await getCurrentAcademicYear(actor);
     const { query: scopedQuery, selectedAcademicYear, selectedStatus } = buildStudentListQuery({
         status: query.status,
-        academicYear: query.academicYear,
+        academicYear: effectiveAcademicYear,
         actor,
     });
     if (!shouldPaginate) {
         let students = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
-            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || query.academicYear))
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
             .filter((student) => !selectedStatus || student.status === selectedStatus);
         if (includeSummaryCounts) {
-            students = await attachStudentSummaryCounts(students, actor, selectedAcademicYear || query.academicYear);
+            students = await attachStudentSummaryCounts(students, actor, selectedAcademicYear || effectiveAcademicYear);
         }
         return students;
     }
 
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
     let allStudents = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
-        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || query.academicYear))
+        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
         .filter((student) => !selectedStatus || student.status === selectedStatus);
     if (includeSummaryCounts) {
-        allStudents = await attachStudentSummaryCounts(allStudents, actor, selectedAcademicYear || query.academicYear);
+        allStudents = await attachStudentSummaryCounts(allStudents, actor, selectedAcademicYear || effectiveAcademicYear);
     }
     const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
     const total = allStudents.length;
@@ -560,6 +577,7 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
             if (existing) {
                 const { update } = buildStudentUpdateForAcademicYear({
                     academicYear: row.academicYear,
+                    currentAcademicYear,
                     existingStudent: existing,
                     input: {
                         name: row.name,
