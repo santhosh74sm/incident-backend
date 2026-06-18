@@ -68,8 +68,10 @@ const cleanFilenamePart = (value, fallback = 'NA', max = 25) => {
     return clean || fallback;
 };
 
-const buildReportFilename = ({ studentClass, studentSection, studentName, admissionNo, category }) =>
+const buildReportFilename = ({ studentClass, studentSection, studentName, admissionNo, category, academicYear }) =>
     [
+        'Incident_Report',
+        cleanFilenamePart(academicYear || 'All_Years', 'All_Years', 12),
         cleanFilenamePart(studentClass),
         cleanFilenamePart(studentSection),
         cleanFilenamePart(studentName),
@@ -164,6 +166,7 @@ const buildCaseReportDocx = async (incidentId, user) => {
         studentName: studentSnapshot.studentName,
         admissionNo: incident.admissionNo,
         category: incident.category,
+        academicYear: incident.academicYear,
     });
 
     return { buffer, filename, contentType: DOCX_MIME_TYPE };
