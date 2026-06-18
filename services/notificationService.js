@@ -41,22 +41,6 @@ const pushToUser = async (userId, schoolId = null) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-const trimUserNotifications = async (userId, schoolId) => {
-    const notificationsToKeep = await Notification.find({ recipient: userId, schoolId })
-        .sort({ createdAt: -1 })
-        .limit(NOTIFICATION_LIMIT)
-        .select('_id')
-        .lean();
-
-    if (notificationsToKeep.length >= NOTIFICATION_LIMIT) {
-        await Notification.deleteMany({
-            recipient: userId,
-            schoolId,
-            _id: { $nin: notificationsToKeep.map((n) => n._id) },
-        });
-    }
-};
-
 const getMyNotifications = async (userId, schoolId) => {
     const notifications = await Notification.find({ recipient: userId, schoolId })
         .populate('incident', 'title status class section studentsInvolved category admissionNo')
@@ -64,9 +48,6 @@ const getMyNotifications = async (userId, schoolId) => {
         .limit(NOTIFICATION_LIMIT)
         .lean();
 
-    trimUserNotifications(userId, schoolId).catch((err) => {
-        logger.error('Notification trim failed', { userId, error: err.message });
-    });
     return notifications;
 };
 

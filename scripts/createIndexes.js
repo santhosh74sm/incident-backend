@@ -18,6 +18,7 @@ const createIndexes = async () => {
         const FieldOperationOption = require('../models/FieldOperationOption');
         const SchoolWorkspace = require('../models/SchoolWorkspace');
         const IssuedLetterCounter = require('../models/IssuedLetterCounter');
+        const Log = require('../models/Log');
 
         const safeDropIndex = async (collection, indexName) => {
             try {
@@ -117,6 +118,11 @@ const createIndexes = async () => {
         await Location.collection.createIndex({ schoolId: 1, name: 1 }, { unique: true });
         await EvidenceType.collection.createIndex({ schoolId: 1, name: 1 }, { unique: true });
         await FieldOperationOption.collection.createIndex({ schoolId: 1, type: 1, order: 1 });
+
+        await Log.collection.createIndex(
+            { createdAt: 1 },
+            { expireAfterSeconds: 365 * 24 * 3600, name: 'createdAt_1' }
+        );
     } catch (error) {
         console.error('Index creation failed:', error);
     } finally {
