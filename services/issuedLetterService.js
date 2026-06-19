@@ -256,7 +256,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
     try {
         const incidentCategory = (incident.incidentCategory || incident.category)?.trim();
         if (!incidentCategory) {
-            return { success: false, message: 'No category specified for incident' };
+            return { success: false, message: 'No category was specified for this incident.' };
         }
 
         const matchingTemplate = await LetterTemplate.findOne({
@@ -272,7 +272,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         if (!matchingTemplate || !templateAvailable) {
             return {
                 success: false,
-                message: `No matching template found for category "${incidentCategory}"`,
+                message: `No matching template was found for the "${incidentCategory}" category.`,
                 categoryMatched: false,
             };
         }
@@ -283,7 +283,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
                 : matchingTemplate.englishTemplateFile;
         const templateBuffer = await getTemplateBuffer(templateFile);
         if (!templateBuffer) {
-            return { success: false, message: 'Template file not found' };
+            return { success: false, message: 'Template file not found.' };
         }
 
         const studentData = await buildIncidentLetterData(incident);
@@ -370,7 +370,7 @@ const LETTER_STATUS_LOOKUP = {
     issued: 'Issued',
     printed: 'Printed',
     sent: 'Sent',
-    'successfully issued': 'Successfully Issued',
+    'successfully issued': 'Successfully issued',
 };
 
 const normalizeLetterStatuses = (values = []) =>
@@ -663,7 +663,7 @@ const deleteIssuedLetter = async (id, user) => {
         incidentId: letter.incident,
     });
 
-    return { message: 'Letter deleted successfully' };
+    return { message: 'Letter deleted successfully.' };
 };
 
 const getLetterFilterOptions = async (user) => {

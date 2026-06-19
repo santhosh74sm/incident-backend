@@ -89,7 +89,7 @@ const deleteCategory = async ({ id, actor }) => {
         details: `Incident Type deleted: ${category.name}`,
     });
 
-    return { message: 'Category deleted successfully' };
+    return { message: 'Category deleted successfully.' };
 };
 
 const getLocations = async (actor, { includeUnknown = false } = {}) => {
@@ -172,7 +172,7 @@ const deleteLocation = async ({ id, actor }) => {
         details: `Location Zone deleted: ${location.name}`,
     });
 
-    return { message: 'Location deleted successfully' };
+    return { message: 'Location deleted successfully.' };
 };
 
 const getEvidenceTypes = async (actor, { includeUnknown = false } = {}) => {
@@ -269,7 +269,7 @@ const deleteEvidenceType = async ({ id, actor }) => {
         details: `Evidence type deleted: ${evidenceType.name}`,
     });
 
-    return { message: 'Evidence type deleted successfully' };
+    return { message: 'Evidence type deleted successfully.' };
 };
 
 const getFieldOperationOptions = async (type, actor) => {
@@ -304,7 +304,7 @@ const deleteFieldOperationOption = async (id, actor) => {
     if (!option) throw new AppError('Option not found', 404);
 
     await FieldOperationOption.findOneAndDelete(tenantFilter(actor, { _id: id }));
-    return { message: 'Option deleted successfully' };
+    return { message: 'Option deleted successfully.' };
 };
 
 const reorderFieldOperationOptions = async (options, actor) => {

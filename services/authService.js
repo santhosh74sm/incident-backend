@@ -404,7 +404,7 @@ const deleteUser = async ({ id, actor }) => {
         { Name: user.name, Role: user.role, targetLabel: user.name }
     );
 
-    return { message: 'Staff member removed' };
+    return { message: 'Staff member removed.' };
 };
 
 const updateUser = async ({ id, input, actor }) => {
@@ -531,7 +531,7 @@ const updateUser = async ({ id, input, actor }) => {
     );
 
     return {
-        message: 'User updated successfully',
+        message: 'User updated successfully.',
         user: {
             id: user._id,
             _id: user._id,
@@ -622,7 +622,7 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
     return {
         user,
         response: {
-            message: 'Password changed successfully',
+            message: 'Password changed successfully.',
             user: {
                 id: user._id,
                 name: user.name,
@@ -688,7 +688,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
     return {
         user: student,
         response: {
-            message: 'Password changed successfully',
+            message: 'Password changed successfully.',
             user: {
                 id: student._id,
                 name: student.name,

@@ -902,7 +902,7 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
         }
     );
 
-    return { message: 'Incident Authorized & Assigned' };
+    return { message: 'Incident authorized and assigned.' };
 };
 
 const addProgressNote = async (incidentId, note, user) => {
@@ -995,8 +995,8 @@ const requestClosure = async (incidentId, actionTaken, user) => {
     });
 
     return closesImmediately
-        ? { message: 'Incident closed successfully', status: incident.status }
-        : { message: 'Closure requested' };
+        ? { message: 'Incident closed successfully.', status: incident.status }
+        : { message: 'Closure requested.' };
 };
 
 const finalizeClosure = async (incidentId, note, user) => {
@@ -1025,7 +1025,7 @@ const finalizeClosure = async (incidentId, note, user) => {
         recipientEntries: [repId, handId].filter(Boolean).map((recipient) => ({ recipient, actionName: 'Incident Closed', message: `Admin ${user.name} closed "${incident.title}".` })),
     });
 
-    return { message: 'Case permanently closed' };
+    return { message: 'Case permanently closed.' };
 };
 
 const rejectClosure = async (incidentId, reason, user) => {
@@ -1060,7 +1060,7 @@ const rejectClosure = async (incidentId, reason, user) => {
         recipientEntries: handlerId ? [{ recipient: handlerId, actionName: 'Closure Rejected', message: `Admin ${user.name} rejected closure for "${incident.title}".` }] : [],
     });
 
-    return { message: 'Closure rejected and case returned to handler', status: incident.status, rejectionReason: incident.rejectionReason };
+    return { message: 'Closure rejected and case returned to the handler.', status: incident.status, rejectionReason: incident.rejectionReason };
 };
 
 const deleteIncident = async (incidentId, user) => {
@@ -1094,7 +1094,7 @@ const deleteIncident = async (incidentId, user) => {
         title: incident.title, class: incident.class, students: incident.studentsInvolved,
     });
 
-    return { message: 'Incident deleted successfully' };
+    return { message: 'Incident deleted successfully.' };
 };
 
 const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {

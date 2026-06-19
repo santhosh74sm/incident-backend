@@ -80,7 +80,7 @@ const getTemplateByCategory = async (category, user) => {
             requestedCategory: decoded,
             hasEnglishDocx: false,
             hasTamilDocx: false,
-            message: 'No Template Found for this Category',
+            message: 'No template found for this category.',
         };
     }
 
@@ -314,7 +314,7 @@ const removeTemplateVariant = async (templateId, lang, user) => {
         Variant: lang,
     });
 
-    return { message: 'Template variant removed' };
+    return { message: 'Template variant removed.' };
 };
 
 const deleteLetterTemplate = async (templateId, user) => {
@@ -345,7 +345,7 @@ const deleteLetterTemplate = async (templateId, user) => {
         Category: template.incidentCategory,
     });
 
-    return { message: 'Template deleted successfully' };
+    return { message: 'Template deleted successfully.' };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ const resolveTemplateDownloadPath = async (templateId, lang, user) => {
 
     const fileField = lang === 'en' ? 'englishTemplateFile' : 'tamilTemplateFile';
     if (!template[fileField]?.key && !template[fileField]?.path) {
-        const err = new Error('No template file uploaded for this variant');
+        const err = new Error('No template file was uploaded for this variant.');
         err.statusCode = 404;
         throw err;
     }

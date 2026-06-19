@@ -104,7 +104,7 @@ const logoutUser = async (req, res) => {
     await sessionService.revokeRefreshToken(req.cookies?.refreshToken);
     clearSessionCookies(res);
     clearCsrfCookie(res);
-    res.json({ message: 'Logged out' });
+    res.json({ message: 'Logged out.' });
 };
 
 const getAllUsers = async (req, res, next) => {

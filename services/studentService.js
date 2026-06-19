@@ -540,9 +540,9 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
             }
             
             if (seenInExcel.has(`${admNo}:${academicYear}`)) {
-                failedRows.push(`Row ${rowNum}: Duplicate Admission No ${admNo} for Academic Year ${academicYear} in this upload`);
+                failedRows.push(`Row ${rowNum}: Duplicate admission number ${admNo} for academic year ${academicYear} in this upload.`);
             } else if (hasAcademicYearHistory(existingByAdmission.get(admNo), academicYear)) {
-                failedRows.push(`Row ${rowNum}: Duplicate academic year record exists for Admission No ${admNo} in ${academicYear}. Update the student through User Management.`);
+                failedRows.push(`Row ${rowNum}: A duplicate academic year record exists for admission number ${admNo} in ${academicYear}. Update the student through User Management.`);
             } else {
                 seenInExcel.add(`${admNo}:${academicYear}`);
                 finalValidRows.push({ ...row, admissionNo: admNo, academicYear });

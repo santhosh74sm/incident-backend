@@ -64,7 +64,7 @@ const uploadTemplateFileController = async (req, res, next) => {
         );
 
         res.json({
-            message: 'File uploaded successfully',
+            message: 'File uploaded successfully.',
             template,
         });
     } catch (error) {

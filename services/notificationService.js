@@ -85,12 +85,12 @@ const markAsReadByIncident = async ({ incidentId, userId, schoolId }) => {
         { read: true }
     );
 
-    return { message: 'Notifications marked as read' };
+    return { message: 'Notifications marked as read.' };
 };
 
 const markAllAsRead = async (userId, schoolId) => {
     await Notification.updateMany({ recipient: userId, schoolId, read: false }, { read: true });
-    return { message: 'All notifications marked as read' };
+    return { message: 'All notifications marked as read.' };
 };
 
 const deleteNotification = async ({ notificationId, userId, schoolId }) => {
@@ -106,12 +106,12 @@ const deleteNotification = async ({ notificationId, userId, schoolId }) => {
         throw new AppError('Notification not found', 404);
     }
 
-    return { message: 'Notification deleted' };
+    return { message: 'Notification deleted.' };
 };
 
 const deleteAllNotifications = async (userId, schoolId) => {
     await Notification.deleteMany({ recipient: userId, schoolId });
-    return { message: 'All notifications deleted' };
+    return { message: 'All notifications deleted.' };
 };
 
 /**
