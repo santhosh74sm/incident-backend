@@ -27,15 +27,11 @@ const ACCOUNT_USER_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'a
 const EDITABLE_ROLES = ['Admin', 'Teacher'];
 const PASSWORD_MIN_LENGTH = 8;
 
-const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include uppercase, lowercase, number, and symbol.';
+const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters.';
 
 const isStrongPassword = (password) =>
     typeof password === 'string' &&
-    password.length >= PASSWORD_MIN_LENGTH &&
-    /[a-z]/.test(password) &&
-    /[A-Z]/.test(password) &&
-    /\d/.test(password) &&
-    /[^A-Za-z0-9]/.test(password);
+    password.length >= PASSWORD_MIN_LENGTH;
 
 const toClientRole = (role) => {
     const normalizedRole = ROLE_MAP[String(role || '').trim().toLowerCase()];
@@ -590,8 +586,8 @@ const resetUserPassword = async ({ id, actor }) => {
 };
 
 const changeStaffPassword = async ({ userId, currentPassword, newPassword, confirmPassword }) => {
-    if (!currentPassword || !newPassword || !confirmPassword) {
-        throw new AppError('Current password, new password, and confirmation are required', 400);
+    if (!newPassword || !confirmPassword) {
+        throw new AppError('New password and confirmation are required', 400);
     }
 
     if (!isStrongPassword(newPassword)) {
@@ -602,12 +598,16 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
         throw new AppError('Passwords do not match', 400);
     }
 
-    if (currentPassword === newPassword) {
+    if (currentPassword && currentPassword === newPassword) {
         throw new AppError('New password must be different from the current password', 400);
     }
 
     const user = await User.findById(userId).exec();
-    if (!user || !(await user.matchPassword(currentPassword))) {
+    if (!user) {
+        throw new AppError('User not found', 404);
+    }
+
+    if (currentPassword && !(await user.matchPassword(currentPassword))) {
         throw new AppError('Current password is incorrect', 401);
     }
 
@@ -629,7 +629,6 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
                 email: user.email,
                 role: toClientRole(user.role),
                 schoolId: user.schoolId,
-                mustChangePassword: false,
             },
             mustChangePassword: false,
         },
@@ -643,8 +642,8 @@ const changeStaffPassword = async ({ userId, currentPassword, newPassword, confi
  * to invalidate all previous sessions after the change.
  */
 const changeStudentPassword = async ({ studentId, currentPassword, newPassword, confirmPassword }) => {
-    if (!currentPassword || !newPassword || !confirmPassword) {
-        throw new AppError('Current password, new password, and confirmation are required', 400);
+    if (!newPassword || !confirmPassword) {
+        throw new AppError('New password and confirmation are required', 400);
     }
 
     if (!isStrongPassword(newPassword)) {
@@ -655,7 +654,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
         throw new AppError('Passwords do not match', 400);
     }
 
-    if (currentPassword === newPassword) {
+    if (currentPassword && currentPassword === newPassword) {
         throw new AppError('New password must be different from the current password', 400);
     }
 
@@ -664,9 +663,11 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
         throw new AppError('Student account not found', 404);
     }
 
-    const passwordMatches = await student.matchPassword(currentPassword);
-    if (!passwordMatches) {
-        throw new AppError('Current password is incorrect', 401);
+    if (currentPassword) {
+        const passwordMatches = await student.matchPassword(currentPassword);
+        if (!passwordMatches) {
+            throw new AppError('Current password is incorrect', 401);
+        }
     }
 
     const salt = await bcrypt.genSalt(12);
