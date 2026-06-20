@@ -165,7 +165,7 @@ const registerUser = async ({ input, actor }) => {
 
     createLog(
         'STAFF_REGISTERED',
-        getActorId(actor),
+        actor || getActorId(actor),
         'Staff',
         user._id,
         {
@@ -243,7 +243,7 @@ const createWorkspace = async ({ input }) => {
 
     createLog(
         'WORKSPACE_CREATED',
-        createdUser._id,
+        createdUser,
         'System',
         workspace._id,
         {
@@ -277,7 +277,7 @@ const loginStaff = async ({ email, password }) => {
 
     createLog(
         'Staff Login',
-        user._id.toString(),
+        user,
         'System',
         null,
         { name: user.name, role: user.role }
@@ -394,7 +394,7 @@ const deleteUser = async ({ id, actor }) => {
 
     createLog(
         'ADMIN_DELETE_USER',
-        getActorId(actor),
+        actor,
         'Staff',
         user._id,
         { Name: user.name, Role: user.role, targetLabel: user.name }
@@ -514,7 +514,7 @@ const updateUser = async ({ id, input, actor }) => {
 
     createLog(
         isRoleChange ? 'USER_ROLE_UPDATED' : 'USER_PROFILE_UPDATED',
-        getActorId(actor),
+        actor,
         'User',
         user._id,
         {
@@ -565,7 +565,7 @@ const resetUserPassword = async ({ id, actor }) => {
     await user.save();
     await revokeUserSessions({ userId: user._id, type: 'staff' });
 
-    createLog('PASSWORD_RESET_BY_SUPER_ADMIN', getActorId(actor), 'Staff', user._id, {
+    createLog('PASSWORD_RESET_BY_SUPER_ADMIN', actor, 'Staff', user._id, {
         Name: user.name,
         Role: user.role,
         targetLabel: user.name,
@@ -680,7 +680,7 @@ const changeStudentPassword = async ({ studentId, currentPassword, newPassword, 
 
     createLog(
         'STUDENT_PASSWORD_CHANGED',
-        studentId.toString(),
+        student,
         'Student',
         student._id,
         { Name: student.name, admissionNo: student.admissionNo }

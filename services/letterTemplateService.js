@@ -143,7 +143,7 @@ const createLetterTemplate = async ({ title, incidentCategory, description }, us
 
     await template.save();
 
-    createLog('TEMPLATE_CREATED', user.id || user._id, 'Template', template._id, {
+    createLog('TEMPLATE_CREATED', user, 'Template', template._id, {
         Title: template.title,
         Category: template.incidentCategory,
     });
@@ -191,7 +191,7 @@ const updateLetterTemplate = async (id, { title, incidentCategory, description }
 
     await template.save();
 
-    createLog('TEMPLATE_UPDATED', user.id || user._id, 'Template', template._id, { Title: template.title });
+    createLog('TEMPLATE_UPDATED', user, 'Template', template._id, { Title: template.title });
 
     return template;
 };
@@ -273,7 +273,7 @@ const attachTemplateFile = async (templateId, language, uploadedFile, user) => {
 
     await template.save();
 
-    createLog('TEMPLATE_UPLOADED', user.id || user._id, 'Template', template._id, {
+    createLog('TEMPLATE_UPLOADED', user, 'Template', template._id, {
         Title: template.title,
         Language: language,
         Filename: newFilename,
@@ -309,7 +309,7 @@ const removeTemplateVariant = async (templateId, lang, user) => {
 
     await template.save();
 
-    createLog('TEMPLATE_VARIANT_DELETED', user.id || user._id, 'Template', template._id, {
+    createLog('TEMPLATE_VARIANT_DELETED', user, 'Template', template._id, {
         Title: template.title,
         Variant: lang,
     });
@@ -340,7 +340,7 @@ const deleteLetterTemplate = async (templateId, user) => {
 
     await LetterTemplate.findOneAndDelete(tenantFilter(user, { _id: templateId }));
 
-    createLog('TEMPLATE_DELETED', user.id || user._id, 'Template', template._id, {
+    createLog('TEMPLATE_DELETED', user, 'Template', template._id, {
         Title: template.title,
         Category: template.incidentCategory,
     });

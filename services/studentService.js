@@ -20,6 +20,9 @@ const {
 } = require('./s3CleanupService');
 
 const STUDENT_FIELDS = ['admissionNo', 'name', 'className', 'section', 'status'];
+const STUDENT_UPLOAD_BATCH_SIZE = 50;
+const STUDENT_UPLOAD_MAX_ROWS = 5000;
+const STUDENT_REFERENCE_SYNC_CONCURRENCY = 10;
 
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
 
@@ -280,32 +283,86 @@ const getFilters = async (actor, options = {}) => {
         ? getAcademicYearQuery(options.academicYear)
         : currentAcademicYear;
     const selectedStatus = normalizeStudentStatusFilter(options.status) || 'Active';
-    if (isAllYears) {
-        const students = await Student.find(tenantFilter(actor)).select('className section academicYear status history').lean();
-        const yearRecords = students
-            .flatMap((student) => projectStudentRecordsForAcademicYear(student, 'all'))
-            .filter((entry) => entry.status === selectedStatus);
-        const classes = Array.from(new Set(yearRecords.map((student) => student.className).filter(Boolean)));
-        const sections = Array.from(new Set(yearRecords.map((student) => student.section).filter(Boolean)));
-
-        return {
-            classes: classes.filter(Boolean).sort((a, b) => a - b),
-            sections: sections.filter(Boolean).sort(),
-            currentAcademicYear,
-        };
+    const match = tenantFilter(actor);
+    if (!isAllYears) {
+        match.$or = [
+            { academicYear: selectedAcademicYear },
+            { 'history.academicYear': selectedAcademicYear },
+        ];
     }
 
-    const { query } = buildStudentListQuery({
-        academicYear: selectedAcademicYear,
-        status: selectedStatus,
-        actor,
-    });
-    const students = (await Student.find(query).select('className section academicYear status history').lean())
-        .map((student) => projectStudentForAcademicYear(student, selectedAcademicYear))
-        .filter(Boolean)
-        .filter((student) => student.status === selectedStatus);
-    const classes = Array.from(new Set(students.map((student) => student.className).filter(Boolean)));
-    const sections = Array.from(new Set(students.map((student) => student.section).filter(Boolean)));
+    const historyRecords = {
+        $map: {
+            input: {
+                $filter: {
+                    input: { $ifNull: ['$history', []] },
+                    as: 'entry',
+                    cond: isAllYears ? true : { $eq: ['$$entry.academicYear', selectedAcademicYear] },
+                },
+            },
+            as: 'entry',
+            in: {
+                academicYear: '$$entry.academicYear',
+                className: { $ifNull: ['$$entry.className', ''] },
+                section: { $ifNull: ['$$entry.section', ''] },
+                status: isAllYears
+                    ? { $ifNull: ['$$entry.status', { $ifNull: ['$status', 'Active'] }] }
+                    : { $ifNull: ['$$entry.status', ''] },
+            },
+        },
+    };
+    const currentRecord = {
+        academicYear: '$academicYear',
+        className: '$className',
+        section: '$section',
+        status: '$status',
+    };
+    const recordsExpression = isAllYears
+        ? {
+            $let: {
+                vars: { historyRecords },
+                in: {
+                    $concatArrays: [
+                        '$$historyRecords',
+                        {
+                            $cond: [
+                                {
+                                    $and: [
+                                        { $ne: [{ $ifNull: ['$academicYear', null] }, null] },
+                                        { $not: [{ $in: ['$academicYear', '$$historyRecords.academicYear'] }] },
+                                    ],
+                                },
+                                [currentRecord],
+                                [],
+                            ],
+                        },
+                    ],
+                },
+            },
+        }
+        : {
+            $let: {
+                vars: { historyRecords },
+                in: { $cond: [{ $gt: [{ $size: '$$historyRecords' }, 0] }, '$$historyRecords', [currentRecord]] },
+            },
+        };
+
+    const [filterValues = { classes: [], sections: [] }] = await Student.aggregate([
+        { $match: match },
+        { $project: { records: recordsExpression } },
+        { $unwind: '$records' },
+        { $replaceWith: '$records' },
+        { $match: { status: selectedStatus } },
+        {
+            $group: {
+                _id: null,
+                classes: { $addToSet: '$className' },
+                sections: { $addToSet: '$section' },
+            },
+        },
+    ]);
+    const classes = filterValues.classes || [];
+    const sections = filterValues.sections || [];
 
     return {
         classes: classes.filter(Boolean).sort((a, b) => a - b),
@@ -379,23 +436,7 @@ const getStudentsByFilter = async ({ className, section, search, page, limit, st
             .filter((student) => !section || student.section === section);
     }
 
-    const pagination = getPagination({ page, limit }, { defaultLimit: 20, maxLimit: 100 });
-    const allStudents = (await Student.find(query).sort({ name: 1 }).lean())
-        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
-        .filter((student) => !selectedStatus || student.status === selectedStatus)
-        .filter((student) => !className || student.className === className)
-        .filter((student) => !section || student.section === section);
-    const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
-    const total = allStudents.length;
-
-    return {
-        data: students,
-        pagination: buildPaginationMeta({
-            page: pagination.page,
-            limit: pagination.limit,
-            total,
-        }),
-    };
+    return getAllStudents({ className, section, search, page, limit, status, academicYear: effectiveAcademicYear }, actor);
 };
 
 const getAllStudents = async (query = {}, actor = null) => {
@@ -409,33 +450,168 @@ const getAllStudents = async (query = {}, actor = null) => {
         academicYear: effectiveAcademicYear,
         actor,
     });
+    const resolvedAcademicYear = selectedAcademicYear || effectiveAcademicYear;
+
+    // ── Non-paginated path ────────────────────────────────────────────────────
+    // Used by /api/students/all (dropdowns, exports, StudentAnalytics full list).
+    // Returns a plain array — no pagination wrapper — to preserve every existing
+    // caller contract.
     if (!shouldPaginate) {
         let students = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
-            .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
+            .flatMap((student) => projectStudentRecordsForAcademicYear(student, resolvedAcademicYear))
             .filter((student) => !selectedStatus || student.status === selectedStatus);
         if (includeSummaryCounts) {
-            students = await attachStudentSummaryCounts(students, actor, selectedAcademicYear || effectiveAcademicYear);
+            students = await attachStudentSummaryCounts(students, actor, resolvedAcademicYear);
         }
         return students;
     }
 
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
-    let allStudents = (await Student.find(scopedQuery).sort({ name: 1 }).lean())
-        .flatMap((student) => projectStudentRecordsForAcademicYear(student, selectedAcademicYear || effectiveAcademicYear))
-        .filter((student) => !selectedStatus || student.status === selectedStatus);
-    if (includeSummaryCounts) {
-        allStudents = await attachStudentSummaryCounts(allStudents, actor, selectedAcademicYear || effectiveAcademicYear);
+    const isAllYears = String(resolvedAcademicYear || '').toLowerCase() === 'all';
+    const listValues = (value) => (Array.isArray(value) ? value : String(value || '').split(','))
+        .map((entry) => String(entry).trim())
+        .filter(Boolean);
+    const classes = listValues(query.className || query.classes);
+    const sections = listValues(query.section || query.sections);
+    const postProjectionMatch = {};
+    if (selectedStatus) postProjectionMatch.status = selectedStatus;
+    if (classes.length) postProjectionMatch.className = { $in: classes };
+    if (sections.length) postProjectionMatch.section = { $in: sections };
+    if (query.search && String(query.search).trim()) {
+        const safeSearch = String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        postProjectionMatch.$or = ['name', 'admissionNo', 'className', 'section']
+            .map((field) => ({ [field]: { $regex: safeSearch, $options: 'i' } }));
     }
-    const students = allStudents.slice(pagination.skip, pagination.skip + pagination.limit);
-    const total = allStudents.length;
 
+    const historyRecords = {
+        $map: {
+            input: { $filter: { input: { $ifNull: ['$history', []] }, as: 'entry', cond: isAllYears ? true : { $eq: ['$$entry.academicYear', resolvedAcademicYear] } } },
+            as: 'entry',
+            in: {
+                academicYear: '$$entry.academicYear',
+                admissionNo: { $ifNull: ['$$entry.admissionNo', '$admissionNo'] },
+                name: { $ifNull: ['$$entry.name', '$name'] },
+                className: { $ifNull: ['$$entry.className', ''] },
+                section: { $ifNull: ['$$entry.section', ''] },
+                status: { $ifNull: ['$$entry.status', '$status'] },
+            },
+        },
+    };
+    const currentRecord = {
+        academicYear: isAllYears ? '$academicYear' : resolvedAcademicYear,
+        admissionNo: '$admissionNo',
+        name: '$name',
+        className: '$className',
+        section: '$section',
+        status: '$status',
+    };
+    const recordsExpression = isAllYears
+        ? {
+            $let: {
+                vars: { historyRecords },
+                in: {
+                    $concatArrays: [
+                        '$$historyRecords',
+                        {
+                            $cond: [
+                                {
+                                    $and: [
+                                        { $ne: [{ $ifNull: ['$academicYear', null] }, null] },
+                                        { $not: [{ $in: ['$academicYear', '$$historyRecords.academicYear'] }] },
+                                    ],
+                                },
+                                [currentRecord],
+                                [],
+                            ],
+                        },
+                    ],
+                },
+            },
+        }
+        : {
+            $let: {
+                vars: { historyRecords },
+                in: { $cond: [{ $gt: [{ $size: '$$historyRecords' }, 0] }, '$$historyRecords', [currentRecord]] },
+            },
+        };
+
+    const sortFields = new Set(['name', 'admissionNo', 'className', 'section', 'incidentCount', 'letterCount']);
+    const sortBy = sortFields.has(query.sortBy) ? query.sortBy : 'name';
+    const sortDirection = String(query.sortDirection || '').toLowerCase() === 'desc' ? -1 : 1;
+    const sortSpec = sortBy === 'name'
+        ? { name: sortDirection, _id: 1 }
+        : { [sortBy]: sortDirection, name: 1, _id: 1 };
+    const pipeline = [
+        { $match: scopedQuery },
+        { $set: { _records: recordsExpression } },
+        { $unwind: '$_records' },
+        {
+            $project: {
+                _id: 1,
+                admissionNo: '$_records.admissionNo',
+                name: '$_records.name',
+                className: '$_records.className',
+                section: '$_records.section',
+                academicYear: '$_records.academicYear',
+                selectedAcademicYear: '$_records.academicYear',
+                status: '$_records.status',
+                tokenVersion: 1,
+                mustChangePassword: 1,
+            },
+        },
+        ...(Object.keys(postProjectionMatch).length ? [{ $match: postProjectionMatch }] : []),
+    ];
+
+    if (includeSummaryCounts) {
+        const countLookup = (from, as) => ({
+            $lookup: {
+                from,
+                let: { admissionNo: '$admissionNo', academicYear: '$academicYear' },
+                pipeline: [
+                    { $match: { $expr: { $and: [
+                        { $eq: ['$schoolId', actor.schoolId] },
+                        { $eq: ['$admissionNo', '$$admissionNo'] },
+                        { $eq: ['$academicYear', '$$academicYear'] },
+                    ] } } },
+                    { $count: 'count' },
+                ],
+                as,
+            },
+        });
+        pipeline.push(
+            countLookup(Incident.collection.name, '_incidentCounts'),
+            countLookup(IssuedLetter.collection.name, '_letterCounts'),
+            { $set: {
+                incidentCount: { $ifNull: [{ $arrayElemAt: ['$_incidentCounts.count', 0] }, 0] },
+                letterCount: { $ifNull: [{ $arrayElemAt: ['$_letterCounts.count', 0] }, 0] },
+            } },
+            { $unset: ['_incidentCounts', '_letterCounts'] }
+        );
+    }
+
+    pipeline.push(
+        { $sort: sortSpec },
+        { $facet: {
+            data: [{ $skip: pagination.skip }, { $limit: pagination.limit }],
+            summary: [{ $group: {
+                _id: null,
+                total: { $sum: 1 },
+                incidentCount: { $sum: { $ifNull: ['$incidentCount', 0] } },
+                letterCount: { $sum: { $ifNull: ['$letterCount', 0] } },
+            } }],
+        } }
+    );
+
+    const [result = { data: [], summary: [] }] = await Student.aggregate(pipeline).allowDiskUse(true);
+    const summary = result.summary[0] || { total: 0, incidentCount: 0, letterCount: 0 };
+    const paginationMeta = buildPaginationMeta({ page: pagination.page, limit: pagination.limit, total: summary.total });
     return {
-        data: students,
-        pagination: buildPaginationMeta({
-            page: pagination.page,
-            limit: pagination.limit,
-            total,
-        }),
+        data: result.data,
+        total: summary.total,
+        page: pagination.page,
+        pages: paginationMeta.totalPages,
+        pagination: paginationMeta,
+        summary,
     };
 };
 
@@ -484,6 +660,9 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
 
         if (!data || data.length === 0) {
             throw new AppError('Excel file is empty or has no valid rows.', 400);
+        }
+        if (data.length > STUDENT_UPLOAD_MAX_ROWS) {
+            throw new AppError(`Student uploads are limited to ${STUDENT_UPLOAD_MAX_ROWS} rows per file. Split this file into smaller batches.`, 400);
         }
 
         const validRows = data
@@ -569,67 +748,89 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
         let updatedCount = 0;
         const generatedCredentials = [];
 
-        for (const row of finalValidRows) {
-            const className = normalizeClassName(row.class);
-            const section = normalizeSection(row.section);
-            const existing = existingByAdmission.get(row.admissionNo);
-
-            if (existing) {
-                const { update } = buildStudentUpdateForAcademicYear({
-                    academicYear: row.academicYear,
-                    currentAcademicYear,
-                    existingStudent: existing,
-                    input: {
-                        name: row.name,
-                        className,
-                        section,
-                        status: 'Active',
-                    },
-                });
-                await Student.updateOne(
-                    tenantFilter(actor, { admissionNo: row.admissionNo }),
-                    { $set: update },
-                    { runValidators: true }
-                );
-                const updatedExisting = {
-                    ...existing,
-                    ...update,
-                    schoolId: existing.schoolId || actor.schoolId,
-                    history: update.history,
-                };
-                await syncStudentReferences(existing, updatedExisting);
-                existingByAdmission.set(row.admissionNo, {
-                    ...updatedExisting,
-                });
-                updatedCount += 1;
-            } else {
-                const credentials = await generateStudentInitialPassword();
-                generatedCredentials.push({ admissionNo: row.admissionNo, tempPassword: credentials.plaintext });
-                const createdStudent = await Student.create({
-                    schoolId: actor.schoolId,
-                    admissionNo: row.admissionNo,
-                    name: row.name,
-                    className,
-                    section,
-                    academicYear: row.academicYear,
-                    history: [buildHistoryEntry({
+        for (let batchStart = 0; batchStart < finalValidRows.length; batchStart += STUDENT_UPLOAD_BATCH_SIZE) {
+            const batch = finalValidRows.slice(batchStart, batchStart + STUDENT_UPLOAD_BATCH_SIZE);
+            const prepared = await Promise.all(batch.map(async (row, batchIndex) => {
+                const className = normalizeClassName(row.class);
+                const section = normalizeSection(row.section);
+                const existing = existingByAdmission.get(row.admissionNo);
+                if (existing) {
+                    const { update } = buildStudentUpdateForAcademicYear({
                         academicYear: row.academicYear,
+                        currentAcademicYear,
+                        existingStudent: existing,
+                        input: { name: row.name, className, section, status: 'Active' },
+                    });
+                    return { row, batchIndex, type: 'update', existing, update };
+                }
+
+                const credentials = await generateStudentInitialPassword();
+                return {
+                    row,
+                    batchIndex,
+                    type: 'insert',
+                    credentials,
+                    document: {
+                        schoolId: actor.schoolId,
                         admissionNo: row.admissionNo,
                         name: row.name,
                         className,
                         section,
-                    })],
-                    password: credentials.hash,
-                    mustChangePassword: true,
+                        academicYear: row.academicYear,
+                        history: [buildHistoryEntry({ academicYear: row.academicYear, admissionNo: row.admissionNo, name: row.name, className, section })],
+                        password: credentials.hash,
+                        mustChangePassword: true,
+                    },
+                };
+            }));
+            const operations = prepared.map((entry) => entry.type === 'update'
+                ? { updateOne: { filter: tenantFilter(actor, { admissionNo: entry.row.admissionNo }), update: { $set: entry.update }, runValidators: true } }
+                : { insertOne: { document: entry.document } });
+            const failedOperationIndexes = new Set();
+            try {
+                await Student.bulkWrite(operations, { ordered: false });
+            } catch (error) {
+                const writeErrors = error?.writeErrors || error?.result?.getWriteErrors?.() || [];
+                if (!writeErrors.length) throw error;
+                writeErrors.forEach((writeError) => {
+                    const index = Number(writeError.index);
+                    if (Number.isInteger(index)) {
+                        failedOperationIndexes.add(index);
+                        const row = prepared[index]?.row;
+                        failedRows.push(`Row ${row?.rowNum || batchStart + index + 2}: ${writeError.errmsg || writeError.message || 'Database write failed'}`);
+                    }
                 });
-                existingByAdmission.set(row.admissionNo, createdStudent.toObject());
-                insertedCount += 1;
+            }
+
+            const referenceSyncEntries = [];
+            prepared.forEach((entry, index) => {
+                if (failedOperationIndexes.has(index)) return;
+                if (entry.type === 'insert') {
+                    generatedCredentials.push({ admissionNo: entry.row.admissionNo, tempPassword: entry.credentials.plaintext });
+                    existingByAdmission.set(entry.row.admissionNo, entry.document);
+                    insertedCount += 1;
+                    return;
+                }
+                const updatedExisting = { ...entry.existing, ...entry.update, schoolId: entry.existing.schoolId || actor.schoolId, history: entry.update.history };
+                existingByAdmission.set(entry.row.admissionNo, updatedExisting);
+                referenceSyncEntries.push({ oldStudent: entry.existing, updatedStudent: updatedExisting, row: entry.row });
+                updatedCount += 1;
+            });
+            for (let syncStart = 0; syncStart < referenceSyncEntries.length; syncStart += STUDENT_REFERENCE_SYNC_CONCURRENCY) {
+                const syncBatch = referenceSyncEntries.slice(syncStart, syncStart + STUDENT_REFERENCE_SYNC_CONCURRENCY);
+                const results = await Promise.allSettled(syncBatch.map((entry) => syncStudentReferences(entry.oldStudent, entry.updatedStudent)));
+                results.forEach((result, index) => {
+                    if (result.status === 'rejected') {
+                        const entry = syncBatch[index];
+                        failedRows.push(`Row ${entry.row?.rowNum || batchStart + syncStart + index + 2}: Student saved, but related records could not be synchronized (${result.reason?.message || 'unknown error'}).`);
+                    }
+                });
             }
         }
 
         createLog(
             'STUDENT_BULK_UPLOAD',
-            getActorId(actor),
+            actor,
             'Student',
             null,
             {
@@ -768,7 +969,7 @@ const deleteStudent = async ({ studentId, actor }) => {
 
     createLog(
         'STUDENT_PERMANENTLY_DELETED',
-        getActorId(actor),
+        actor,
         'System',
         null,
         {
@@ -858,7 +1059,7 @@ const createStudent = async ({ input, actor }) => {
 
     createLog(
         'STUDENT_REGISTER',
-        getActorId(actor),
+        actor,
         'Student',
         student._id,
         {
@@ -1191,7 +1392,7 @@ const updateStudent = async ({ studentId, input, actor }) => {
 
     createLog(
         statusAction,
-        getActorId(actor),
+        actor,
         'Student',
         updatedStudent._id,
         {

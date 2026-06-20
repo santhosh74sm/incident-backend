@@ -16,6 +16,7 @@ const User = require('../models/User');
 const Category = require('../models/Category');
 const Location = require('../models/Location');
 const EvidenceType = require('../models/EvidenceType');
+const IssuedLetter = require('../models/IssuedLetter');
 
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
@@ -342,6 +343,23 @@ const buildIncidentQuery = async (user, query) => {
     const academicYear = getAcademicYearQuery(query?.academicYear);
     if (academicYear) baseConditions.push({ academicYear });
 
+    const search = String(query?.search || query?.query || '').trim();
+    if (search) {
+        const safeSearch = escapeRegex(search);
+        const searchRegex = { $regex: safeSearch, $options: 'i' };
+        baseConditions.push({
+            $or: [
+                { title: searchRegex },
+                { admissionNo: searchRegex },
+                { studentsInvolved: searchRegex },
+            ],
+        });
+    }
+
+    if (String(query?.highPriority || '').toLowerCase() === 'true') {
+        baseConditions.push({ isHighPriority: true });
+    }
+
     if (OPERATIONAL_ROLES.includes(user.role)) {
         baseConditions.push({ $or: [{ reportedBy: user.id }, { assignedHandler: user.id }] });
     }
@@ -388,6 +406,17 @@ const buildIncidentQuery = async (user, query) => {
 
     const statuses = normalizeStatuses(parseAliasedListParam(query, ['statuses', 'status']));
     if (statuses.length > 0) baseConditions.push({ status: { $in: statuses } });
+
+    const readStatus = String(query?.readStatus || '').trim().toLowerCase();
+    if (readStatus === 'read' || readStatus === 'unread') {
+        const readIncidentIds = await IncidentReadState.distinct('incident', {
+            schoolId: user.schoolId,
+            user: getUserId(user),
+        });
+        baseConditions.push({
+            _id: readStatus === 'read' ? { $in: readIncidentIds } : { $nin: readIncidentIds },
+        });
+    }
 
     const staff = parseAliasedListParam(query, ['staff', 'staffIds', 'handler', 'handlerId', 'assignedHandler']);
     const includeUnassigned = String(query.unassigned || query.includeUnassigned || '').toLowerCase() === 'true';
@@ -652,7 +681,7 @@ const createIncidents = async ({ body, files, user }) => {
         createdIncidents.forEach((incident) => {
             createLog(
                 useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
-                user.id || user._id,
+                user,
                 'Incident',
                 incident._id,
                 buildIncidentMetadata(incident, {
@@ -688,10 +717,10 @@ const createIncidents = async ({ body, files, user }) => {
     return { createdIncidents, failedStudents, generatedLetters, isBulkSubmission };
 };
 
-const listIncidents = async ({ user, query }) => {
+const listIncidents = async ({ user, query, maxLimit = 100 }) => {
     const builtQuery = await buildIncidentQuery(user, query);
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
-    const pagination = getPagination(query, { defaultLimit: 20, maxLimit: 100 });
+    const pagination = getPagination(query, { defaultLimit: 20, maxLimit });
 
     let incidentQuery = Incident.find(builtQuery)
         .populate('reportedBy', 'name role')
@@ -721,6 +750,41 @@ const listIncidents = async ({ user, query }) => {
     }
 
     return { paginated: false, data: enhanced };
+};
+
+const getIncidentSummary = async ({ user, query = {} }) => {
+    const builtQuery = await buildIncidentQuery(user, query);
+    const adminIds = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } })
+        .distinct('_id');
+    const [grouped, readIncidentIds] = await Promise.all([
+        Incident.aggregate([
+        { $match: builtQuery },
+        {
+            $group: {
+                _id: null,
+                total: { $sum: 1 },
+                open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } },
+                inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
+                closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } },
+                highPriority: { $sum: { $cond: [{ $eq: ['$isHighPriority', true] }, 1, 0] } },
+                unassigned: {
+                    $sum: {
+                        $cond: [
+                            { $or: [{ $eq: [{ $ifNull: ['$assignedHandler', null] }, null] }, { $in: ['$assignedHandler', adminIds] }] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+            },
+        },
+        ]).then((rows) => rows[0]),
+        IncidentReadState.distinct('incident', { schoolId: user.schoolId, user: getUserId(user) }),
+    ]);
+
+    const summary = grouped || { total: 0, open: 0, inProgress: 0, closed: 0, highPriority: 0, unassigned: 0 };
+    const unread = await Incident.countDocuments({ $and: [builtQuery, { _id: { $nin: readIncidentIds } }] });
+    return { ...summary, active: summary.open + summary.inProgress, unread };
 };
 
 const getDistinctClasses = async (user) => {
@@ -768,6 +832,151 @@ const getLocationDistribution = async ({ user, query }) => {
         rows.push({ location, count: entry.count });
         return rows;
     }, []);
+};
+
+const getAnalyticsTimezone = (query = {}) => {
+    const offsetMinutes = Number(query.timezoneOffsetMinutes);
+    if (!Number.isFinite(offsetMinutes) || offsetMinutes < -840 || offsetMinutes > 840) return 'UTC';
+    const absolute = Math.abs(-offsetMinutes);
+    const hours = String(Math.floor(absolute / 60)).padStart(2, '0');
+    const minutes = String(absolute % 60).padStart(2, '0');
+    return `${-offsetMinutes >= 0 ? '+' : '-'}${hours}:${minutes}`;
+};
+
+const analyticsValueExpression = (field, fallback = UNKNOWN_FILTER_LABEL) => ({
+    $let: {
+        vars: { normalized: { $trim: { input: { $ifNull: [field, ''] } } } },
+        in: { $cond: [{ $eq: ['$$normalized', ''] }, fallback, '$$normalized'] },
+    },
+});
+
+const getProfessionalAnalytics = async ({ user, query = {} }) => {
+    const builtQuery = await buildIncidentQuery(user, query);
+    const adminRoles = ADMIN_ROLES;
+    const timezone = getAnalyticsTimezone(query);
+    const [result = {}] = await Incident.aggregate([
+        { $match: builtQuery },
+        { $lookup: { from: User.collection.name, localField: 'assignedHandler', foreignField: '_id', as: '_handler' } },
+        { $lookup: { from: IssuedLetter.collection.name, localField: '_id', foreignField: 'incident', as: '_letters' } },
+        {
+            $set: {
+                _handler: { $arrayElemAt: ['$_handler', 0] },
+                _category: { $cond: [{ $eq: [{ $ifNull: ['$category', ''] }, ''] }, 'Uncategorized', '$category'] },
+                _location: analyticsValueExpression('$location'),
+                _className: { $ifNull: ['$class', { $ifNull: ['$studentSnapshot.className', UNKNOWN_FILTER_LABEL] }] },
+                _academicYear: { $cond: [{ $eq: [{ $ifNull: ['$academicYear', ''] }, ''] }, 'Unassigned Year', '$academicYear'] },
+                _incidentTimestamp: { $ifNull: ['$incidentDate', { $ifNull: ['$openedAt', '$submittedAt'] }] },
+                _hasLetter: { $gt: [{ $size: '$_letters' }, 0] },
+                _evidenceValues: {
+                    $cond: [
+                        { $gt: [{ $size: { $ifNull: ['$evidence', []] } }, 0] },
+                        { $map: { input: '$evidence', as: 'entry', in: analyticsValueExpression('$$entry.evidenceType') } },
+                        [UNKNOWN_FILTER_LABEL],
+                    ],
+                },
+            },
+        },
+        {
+            $set: {
+                _handlerName: {
+                    $cond: [
+                        { $or: [{ $eq: [{ $ifNull: ['$_handler', null] }, null] }, { $in: ['$_handler.role', adminRoles] }] },
+                        'Admin',
+                        { $ifNull: ['$_handler.name', 'Admin'] },
+                    ],
+                },
+                _isUnassigned: { $or: [{ $eq: [{ $ifNull: ['$_handler', null] }, null] }, { $in: ['$_handler.role', adminRoles] }] },
+            },
+        },
+        {
+            $facet: {
+                summary: [{ $group: {
+                    _id: null,
+                    total: { $sum: 1 },
+                    open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } },
+                    inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
+                    closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } },
+                    lettersIssued: { $sum: { $cond: ['$_hasLetter', 1, 0] } },
+                    unassigned: { $sum: { $cond: ['$_isUnassigned', 1, 0] } },
+                    hasUnknownLocation: { $max: { $cond: [{ $eq: ['$_location', UNKNOWN_FILTER_LABEL] }, 1, 0] } },
+                    hasUnknownEvidence: { $max: { $cond: [{ $in: [UNKNOWN_FILTER_LABEL, '$_evidenceValues'] }, 1, 0] } },
+                } }],
+                categoryData: [{ $group: { _id: '$_category', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
+                locationData: [{ $group: { _id: '$_location', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
+                evidenceData: [{ $unwind: '$_evidenceValues' }, { $group: { _id: '$_evidenceValues', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
+                classWiseData: [{ $group: { _id: '$_className', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
+                staffWorkload: [{ $group: { _id: '$_handlerName', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $sort: { total: -1 } }, { $limit: 8 }],
+                categoryHeatmap: [{ $group: { _id: '$_category', open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $set: { total: { $add: ['$open', '$inProgress', '$closed'] } } }, { $sort: { total: -1 } }],
+                academicYearData: [{ $group: { _id: '$_academicYear', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
+                trendBuckets: [{ $match: { _incidentTimestamp: { $ne: null } } }, { $group: { _id: { $dateToString: { date: '$_incidentTimestamp', format: '%Y-%m-%d', timezone } }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } }, created: { $sum: 1 } } }, { $sort: { _id: 1 } }],
+            },
+        },
+    ]).allowDiskUse(true);
+
+    const summary = result.summary?.[0] || {};
+    const total = summary.total || 0;
+    if (total === 0 && await Incident.exists(builtQuery)) {
+        throw new AppError('Analytics aggregation returned no data for a non-empty incident scope.', 500);
+    }
+    const open = summary.open || 0;
+    const inProgress = summary.inProgress || 0;
+    const closed = summary.closed || 0;
+    const sortAcademicYears = (a, b) => {
+        const first = Number(String(a.academicYear).slice(0, 4));
+        const second = Number(String(b.academicYear).slice(0, 4));
+        if (!Number.isNaN(first) && !Number.isNaN(second)) return first - second;
+        return String(a.academicYear).localeCompare(String(b.academicYear));
+    };
+
+    return {
+        total,
+        open,
+        inProgress,
+        closed,
+        lettersIssued: summary.lettersIssued || 0,
+        active: open + inProgress,
+        unassigned: summary.unassigned || 0,
+        resolutionRate: total > 0 ? `${Math.round((closed / total) * 100)}%` : '0%',
+        statusData: [
+            { name: 'Open', value: open },
+            { name: 'In progress', value: inProgress },
+            { name: 'Closed', value: closed },
+        ],
+        categoryData: (result.categoryData || []).map(({ _id, count }) => ({ name: _id, count })),
+        locationData: (result.locationData || []).map(({ _id, count }) => ({ name: _id, count })),
+        evidenceData: (result.evidenceData || []).map(({ _id, count }) => ({ name: _id, count })),
+        classWiseData: (result.classWiseData || []).map(({ _id, ...entry }) => ({ className: _id, ...entry })).sort((a, b) => Number(a.className) - Number(b.className) || String(a.className).localeCompare(String(b.className))),
+        staffWorkload: (result.staffWorkload || []).map(({ _id, ...entry }) => ({ name: _id, ...entry })),
+        categoryHeatmap: (result.categoryHeatmap || []).map(({ _id, total: ignored, ...entry }) => ({ label: _id, ...entry })),
+        academicYearData: (result.academicYearData || []).map(({ _id, ...entry }) => ({ name: _id, academicYear: _id, ...entry, unresolved: entry.open + entry.inProgress })).sort(sortAcademicYears),
+        trendBuckets: (result.trendBuckets || []).map(({ _id, ...entry }) => ({ date: _id, ...entry })),
+        hasUnknownLocation: Boolean(summary.hasUnknownLocation),
+        hasUnknownEvidence: Boolean(summary.hasUnknownEvidence),
+    };
+};
+
+const getProfessionalAnalyticsDetails = async ({ user, query = {} }) => {
+    const result = await listIncidents({
+        user,
+        query: { ...query, page: query.page || 1, limit: query.limit || 100 },
+        maxLimit: 500,
+    });
+    const data = result.data || [];
+    const incidentIds = data.map((incident) => incident._id).filter(Boolean);
+    const letters = incidentIds.length
+        ? await IssuedLetter.find({ schoolId: user.schoolId, incident: { $in: incidentIds } })
+            .select('incident letterNumber generatedAt')
+            .lean()
+        : [];
+    const letterStatusMap = {};
+    letters.forEach((letter) => {
+        letterStatusMap[String(letter.incident)] = {
+            hasLetter: true,
+            letterNumber: letter.letterNumber,
+            generatedAt: letter.generatedAt,
+        };
+    });
+    return { data, letterStatusMap, pagination: result.pagination };
 };
 
 const getIncidentById = async (id, user) => {
@@ -884,7 +1093,7 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
 
     createLog(
         'Incident Authorized & Assigned',
-        user.id,
+        user,
         'Incident',
         incident._id,
         buildIncidentMetadata(incident, { handlerId: handlerId || null }),
@@ -946,7 +1155,7 @@ const addProgressNote = async (incidentId, note, user) => {
 
     createLog(
         progressActionName,
-        user.id,
+        user,
         'Incident',
         incident._id,
         buildIncidentMetadata(incident, { note, status: incident.status, previousStatus: movedToInProgress ? 'Open' : incident.status }),
@@ -990,7 +1199,7 @@ const requestClosure = async (incidentId, actionTaken, user) => {
 
     await incident.save();
 
-    createLog(closesImmediately ? 'Incident Closed' : 'Closure Requested', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { actionTaken: trimmedActionTaken, status: incident.status, closureRequested: incident.closureRequested, closedAt: incident.closedAt || null }), {
+    createLog(closesImmediately ? 'Incident Closed' : 'Closure Requested', user, 'Incident', incident._id, buildIncidentMetadata(incident, { actionTaken: trimmedActionTaken, status: incident.status, closureRequested: incident.closureRequested, closedAt: incident.closedAt || null }), {
         type: closesImmediately ? 'INCIDENT_CLOSED' : 'CLOSURE_REQUESTED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), recipientRoles: ['Super Admin', 'Admin'], message: closesImmediately ? `${user.name} closed "${incident.title}".` : `${user.name} requested closure for "${incident.title}".`,
     });
 
@@ -1020,7 +1229,7 @@ const finalizeClosure = async (incidentId, note, user) => {
     const repId = incident.reportedBy?._id || incident.reportedBy;
     const handId = incident.assignedHandler?._id || incident.assignedHandler;
 
-    createLog('Incident Closed', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { note: note || null, status: incident.status, closedAt: incident.closedAt }), {
+    createLog('Incident Closed', user, 'Incident', incident._id, buildIncidentMetadata(incident, { note: note || null, status: incident.status, closedAt: incident.closedAt }), {
         type: 'INCIDENT_CLOSED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident),
         recipientEntries: [repId, handId].filter(Boolean).map((recipient) => ({ recipient, actionName: 'Incident Closed', message: `Admin ${user.name} closed "${incident.title}".` })),
     });
@@ -1055,7 +1264,7 @@ const rejectClosure = async (incidentId, reason, user) => {
 
     const handlerId = incident.assignedHandler?._id || incident.assignedHandler;
 
-    createLog('Closure Rejected', user.id, 'Incident', incident._id, buildIncidentMetadata(incident, { reason: incident.rejectionReason, status: incident.status, closureRequested: incident.closureRequested }), {
+    createLog('Closure Rejected', user, 'Incident', incident._id, buildIncidentMetadata(incident, { reason: incident.rejectionReason, status: incident.status, closureRequested: incident.closureRequested }), {
         type: 'INCIDENT_STATUS_UPDATED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident),
         recipientEntries: handlerId ? [{ recipient: handlerId, actionName: 'Closure Rejected', message: `Admin ${user.name} rejected closure for "${incident.title}".` }] : [],
     });
@@ -1090,7 +1299,7 @@ const deleteIncident = async (incidentId, user) => {
     await Incident.findOneAndDelete(tenantFilter(user, { _id: incidentId }));
     await IncidentReadState.deleteMany(tenantFilter(user, { incident: incidentId }));
 
-    createLog('Incident Deleted', user.id || user._id, 'Incident', incident._id, {
+    createLog('Incident Deleted', user, 'Incident', incident._id, {
         title: incident.title, class: incident.class, students: incident.studentsInvolved,
     });
 
@@ -1164,7 +1373,7 @@ const deleteEvidence = async (incidentId, evidenceId, user) => {
 
     createLog(
         'Evidence Deleted',
-        user.id || user._id,
+        user,
         'Incident',
         incident._id,
         buildIncidentMetadata(incident, {
@@ -1201,7 +1410,7 @@ const updateDescription = async (incidentId, description, user) => {
 
     createLog(
         'Incident Description Updated',
-        user.id || user._id,
+        user,
         'Incident',
         incident._id,
         buildIncidentMetadata(incident, { editedBy: user.name, editedAt: new Date() })
@@ -1563,7 +1772,7 @@ const processExcelUpload = async (filePath, user, body) => {
         await Promise.all(letterPromises);
     }
 
-    createLog('Bulk Upload Processed', user.id, 'Bulk Upload', null, {
+    createLog('Bulk Upload Processed', user, 'Bulk Upload', null, {
         targetLabel: `${createdIncidents.length} incidents uploaded`,
         count: createdIncidents.length,
         lettersGenerated: lettersGenerated.length,
@@ -1668,9 +1877,12 @@ const buildDownloadTemplate = async (format = 'xlsx', user) => {
 module.exports = {
     createIncidents,
     listIncidents,
+    getIncidentSummary,
     getDistinctClasses,
     getDistinctSections,
     getLocationDistribution,
+    getProfessionalAnalytics,
+    getProfessionalAnalyticsDetails,
     getIncidentById,
     markIncidentRead,
     approveAndAssign,

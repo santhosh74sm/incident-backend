@@ -5,8 +5,17 @@ const Log = require('../models/Log');
 const User = require('../models/User');
 const logger = require('./pinoLogger');
 
-const normalizeId = (value) => (value ? value.toString() : null);
+const normalizeId = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object' && (value._id || value.id)) {
+        return String(value._id || value.id);
+    }
+    return value.toString();
+};
 const isObjectIdLike = (value) => Boolean(value && mongoose.Types.ObjectId.isValid(value.toString()));
+// `req.user` is a fresh object for each authenticated request. Caching by object
+// identity keeps actor attribution request-scoped without retaining request data.
+const requestActorProfileCache = new WeakMap();
 
 const pickTargetLabel = (metadata = {}, fallbackEntityId = null) =>
     metadata.targetLabel ||
@@ -97,6 +106,26 @@ const buildNotificationMessage = ({ actionName, actorName, targetLabel, studentD
 };
 
 const resolveActorProfile = async (performedBy, notificationConfig = {}) => {
+    if (performedBy && typeof performedBy === 'object') {
+        let cachedProfile = requestActorProfileCache.get(performedBy);
+        if (!cachedProfile) {
+            cachedProfile = {
+                actorId: normalizeId(performedBy),
+                performedByName: performedBy.name || 'System',
+                performedByRole: performedBy.role || null,
+                schoolId: performedBy.schoolId || null,
+            };
+            requestActorProfileCache.set(performedBy, cachedProfile);
+        }
+
+        return {
+            ...cachedProfile,
+            performedByName: notificationConfig.performedByName || cachedProfile.performedByName,
+            performedByRole: notificationConfig.performedByRole || cachedProfile.performedByRole,
+            schoolId: notificationConfig.schoolId || cachedProfile.schoolId,
+        };
+    }
+
     const fallbackName =
         notificationConfig.performedByName ||
         (typeof performedBy === 'string' && !isObjectIdLike(performedBy) ? performedBy : 'System');

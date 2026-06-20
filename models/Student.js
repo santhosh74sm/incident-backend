@@ -7,7 +7,6 @@ const studentSchema = new mongoose.Schema(
             type: String,
             required: true,
             trim: true,
-            index: true,
         },
         schoolId: {
             type: String,
@@ -15,7 +14,6 @@ const studentSchema = new mongoose.Schema(
             immutable: true,
             uppercase: true,
             trim: true,
-            index: true,
         },
         name: {
             type: String,

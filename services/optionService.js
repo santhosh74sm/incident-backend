@@ -37,7 +37,7 @@ const addCategory = async ({ input, actor }) => {
 
     const category = await Category.create(tenantDoc(actor, { name: trimmedName }));
 
-    createLog('Add', getActorId(actor), 'Category', category._id, {
+    createLog('Add', actor, 'Category', category._id, {
         targetLabel: category.name,
         details: `New Incident Type added: ${category.name}`,
     });
@@ -66,7 +66,7 @@ const updateCategory = async ({ id, input, actor }) => {
         LetterTemplate.updateMany(tenantFilter(actor, { incidentCategory: previousName }), { $set: { incidentCategory: nextName } }),
     ]);
 
-    createLog('Edit', getActorId(actor), 'Category', category._id, {
+    createLog('Edit', actor, 'Category', category._id, {
         targetLabel: nextName,
         previousName,
         newName: nextName,
@@ -84,7 +84,7 @@ const deleteCategory = async ({ id, actor }) => {
 
     await Category.findOneAndDelete(tenantFilter(actor, { _id: id }));
 
-    createLog('Remove', getActorId(actor), 'Category', category._id, {
+    createLog('Remove', actor, 'Category', category._id, {
         targetLabel: category.name,
         details: `Incident Type deleted: ${category.name}`,
     });
@@ -123,7 +123,7 @@ const addLocation = async ({ input, actor }) => {
 
     const location = await Location.create(tenantDoc(actor, { name: trimmedName }));
 
-    createLog('Add', getActorId(actor), 'Location', location._id, {
+    createLog('Add', actor, 'Location', location._id, {
         targetLabel: location.name,
         details: `New Location Zone added: ${location.name}`,
     });
@@ -149,7 +149,7 @@ const updateLocation = async ({ id, input, actor }) => {
 
     await Incident.updateMany(tenantFilter(actor, { location: previousName }), { $set: { location: nextName } });
 
-    createLog('Edit', getActorId(actor), 'Location', location._id, {
+    createLog('Edit', actor, 'Location', location._id, {
         targetLabel: nextName,
         previousName,
         newName: nextName,
@@ -167,7 +167,7 @@ const deleteLocation = async ({ id, actor }) => {
 
     await Location.findOneAndDelete(tenantFilter(actor, { _id: id }));
 
-    createLog('Remove', getActorId(actor), 'Location', location._id, {
+    createLog('Remove', actor, 'Location', location._id, {
         targetLabel: location.name,
         details: `Location Zone deleted: ${location.name}`,
     });
@@ -212,7 +212,7 @@ const addEvidenceType = async ({ input, actor }) => {
         createdBy: getActorId(actor),
     }));
 
-    createLog('Add', getActorId(actor), 'EvidenceType', evidenceType._id, {
+    createLog('Add', actor, 'EvidenceType', evidenceType._id, {
         targetLabel: evidenceType.name,
         details: `Evidence type added: ${evidenceType.name}`,
     });
@@ -246,7 +246,7 @@ const updateEvidenceType = async ({ id, input, actor }) => {
         { arrayFilters: [{ 'entry.evidenceType': previousName }] }
     );
 
-    createLog('Edit', getActorId(actor), 'EvidenceType', evidenceType._id, {
+    createLog('Edit', actor, 'EvidenceType', evidenceType._id, {
         targetLabel: nextName,
         previousName,
         newName: nextName,
@@ -264,7 +264,7 @@ const deleteEvidenceType = async ({ id, actor }) => {
 
     await EvidenceType.findOneAndDelete(tenantFilter(actor, { _id: id }));
 
-    createLog('Remove', getActorId(actor), 'EvidenceType', evidenceType._id, {
+    createLog('Remove', actor, 'EvidenceType', evidenceType._id, {
         targetLabel: evidenceType.name,
         details: `Evidence type deleted: ${evidenceType.name}`,
     });

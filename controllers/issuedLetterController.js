@@ -22,7 +22,12 @@ const getIssuedLetters = async (req, res, next) => {
         const result = await issuedLetterService.listIssuedLetters(req.query, req.user);
 
         if (result.paginated) {
-            return res.json({ data: result.data, pagination: result.pagination });
+            return res.json({
+                data: result.data,
+                pagination: result.pagination,
+                summary: result.summary,
+                matchingIds: result.matchingIds,
+            });
         }
 
         return res.json(result.data);

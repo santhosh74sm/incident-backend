@@ -424,6 +424,18 @@ const buildLetterQuery = async (query) => {
         builtQuery.admissionNo = { $regex: safe, $options: 'i' };
     }
 
+    const search = String(query.search || '').trim();
+    if (search) {
+        const searchRegex = { $regex: escapeRegex(search), $options: 'i' };
+        builtQuery.$or = [
+            { studentName: searchRegex },
+            { admissionNo: searchRegex },
+            { letterNumber: searchRegex },
+            { incidentCategory: searchRegex },
+            { title: searchRegex },
+        ];
+    }
+
     const classes = parseAliasedListQueryParam(query, ['className', 'class', 'classes']);
     if (classes.length > 0) builtQuery.className = { $in: classes };
 
@@ -477,9 +489,21 @@ const listIssuedLetters = async (query, user) => {
         letterQuery = letterQuery.skip(pagination.skip).limit(pagination.limit);
     }
 
-    const [data, total] = await Promise.all([
+    const includeMatchingIds = String(query.includeMatchingIds || '').toLowerCase() === 'true';
+    const [data, total, summaryRows, matchingIds] = await Promise.all([
         letterQuery.lean(),
         shouldPaginate ? IssuedLetter.countDocuments(builtQuery) : Promise.resolve(null),
+        shouldPaginate
+            ? IssuedLetter.aggregate([
+                { $match: builtQuery },
+                { $group: { _id: { $ifNull: ['$incidentCategory', 'Uncategorized'] }, count: { $sum: 1 } } },
+                { $project: { _id: 0, category: '$_id', count: 1 } },
+                { $sort: { count: -1, category: 1 } },
+            ])
+            : Promise.resolve([]),
+        shouldPaginate && includeMatchingIds
+            ? IssuedLetter.find(builtQuery).distinct('_id')
+            : Promise.resolve([]),
     ]);
 
     if (shouldPaginate) {
@@ -487,6 +511,8 @@ const listIssuedLetters = async (query, user) => {
             paginated: true,
             data,
             pagination: buildPaginationMeta({ page: pagination.page, limit: pagination.limit, total }),
+            summary: { categories: summaryRows },
+            matchingIds,
         };
     }
 
@@ -624,7 +650,7 @@ const updateIssuedLetter = async (id, body, user) => {
 
     await letter.save();
 
-    createLog('Letter Updated', user.id || user._id, 'Letter', letter._id, {
+    createLog('Letter Updated', user, 'Letter', letter._id, {
         status: letter.status,
         letterNumber: letter.letterNumber,
         incidentId: letter.incident,
@@ -657,7 +683,7 @@ const deleteIssuedLetter = async (id, user) => {
     if (schoolId) await IssuedLetter.findOneAndDelete(tenantFilter(user, { _id: id }));
     else await IssuedLetter.findByIdAndDelete(id);
 
-    createLog('Letter Deleted', actorId, 'Letter', letter._id, {
+    createLog('Letter Deleted', user, 'Letter', letter._id, {
         letterNumber: letter.letterNumber,
         studentName: letter.studentName,
         incidentId: letter.incident,

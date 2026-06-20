@@ -12,9 +12,12 @@ const router = express.Router();
 const {
     createIncident,
     getIncidents,
+    getIncidentSummary,
     getIncidentById,
     markIncidentRead,
     getIncidentLocationDistribution,
+    getProfessionalAnalytics,
+    getProfessionalAnalyticsDetails,
     addProgressNote,
     requestClosure,
     finalizeClosure,
@@ -81,6 +84,9 @@ router.get('/sections', protect, async (req, res, next) => {
 });
 
 router.get('/location-distribution', protect, validate(listIncidentsQuerySchema, 'query'), getIncidentLocationDistribution);
+router.get('/summary', protect, validate(listIncidentsQuerySchema, 'query'), getIncidentSummary);
+router.get('/analytics', protect, validate(listIncidentsQuerySchema, 'query'), getProfessionalAnalytics);
+router.get('/analytics/details', protect, validate(listIncidentsQuerySchema, 'query'), getProfessionalAnalyticsDetails);
 
 // ─── Template download ────────────────────────────────────────────────────────
 router.get('/template', protect, validate(templateFormatQuerySchema, 'query'), downloadTemplate);

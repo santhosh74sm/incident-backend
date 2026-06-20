@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const refreshTokenSchema = new mongoose.Schema(
     {
         user: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
-        schoolId: { type: String, required: true, uppercase: true, trim: true, index: true },
+        schoolId: { type: String, required: true, uppercase: true, trim: true },
         userModel: { type: String, enum: ['User', 'Student'], required: true },
         type: { type: String, enum: ['staff', 'student'], required: true },
         tokenHash: { type: String, required: true, unique: true, index: true },

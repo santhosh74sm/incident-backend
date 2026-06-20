@@ -3,8 +3,7 @@ const IssuedLetterCounter = require('./IssuedLetterCounter');
 
 const issuedLetterSchema = new mongoose.Schema({
     letterNumber: {
-        type: String,
-        index: true
+        type: String
     },
     schoolId: {
         type: String,
@@ -12,23 +11,19 @@ const issuedLetterSchema = new mongoose.Schema({
         immutable: true,
         uppercase: true,
         trim: true,
-        index: true,
     },
     academicYear: {
         type: String,
         trim: true,
-        index: true,
     },
     incident: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Incident',
-        required: true,
-        index: true
+        required: true
     },
     studentName: {
         type: String,
-        required: true,
-        index: true
+        required: true
     },
     admissionNo: {
         type: String,
@@ -44,8 +39,7 @@ const issuedLetterSchema = new mongoose.Schema({
     },
     incidentCategory: {
         type: String,
-        required: true,
-        index: true
+        required: true
     },
     templateId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -76,8 +70,7 @@ const issuedLetterSchema = new mongoose.Schema({
     status: {
         type: String,
         enum: ['Issued', 'Printed', 'Sent'],
-        default: 'Issued',
-        index: true
+        default: 'Issued'
     },
     language: {
         type: String,
@@ -93,8 +86,7 @@ const issuedLetterSchema = new mongoose.Schema({
     },
     generatedAt: {
         type: Date,
-        default: Date.now,
-        index: true
+        default: Date.now
     }
 }, { 
     timestamps: true,

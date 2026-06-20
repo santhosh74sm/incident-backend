@@ -32,11 +32,28 @@ const createIndexes = async () => {
 
         await Promise.all([
             safeDropIndex(Student.collection, 'admissionNo_1'),
+            safeDropIndex(Student.collection, 'schoolId_1'),
             safeDropIndex(IssuedLetter.collection, 'letterNumber_1'),
+            safeDropIndex(IssuedLetter.collection, 'schoolId_1'),
+            safeDropIndex(IssuedLetter.collection, 'academicYear_1'),
+            safeDropIndex(IssuedLetter.collection, 'incident_1'),
+            safeDropIndex(IssuedLetter.collection, 'studentName_1'),
+            safeDropIndex(IssuedLetter.collection, 'incidentCategory_1'),
+            safeDropIndex(IssuedLetter.collection, 'status_1'),
+            safeDropIndex(IssuedLetter.collection, 'generatedAt_1'),
             safeDropIndex(LetterTemplate.collection, 'incidentCategory_1'),
             safeDropIndex(Category.collection, 'name_1'),
             safeDropIndex(Location.collection, 'name_1'),
             safeDropIndex(EvidenceType.collection, 'name_1'),
+            safeDropIndex(User.collection, 'schoolId_1'),
+            safeDropIndex(Incident.collection, 'schoolId_1'),
+            safeDropIndex(Incident.collection, 'academicYear_1'),
+            safeDropIndex(Incident.collection, 'isHighPriority_1'),
+            safeDropIndex(Incident.collection, 'admissionNo_1'),
+            safeDropIndex(Incident.collection, 'student_1'),
+            safeDropIndex(Incident.collection, 'reportedBy_1'),
+            safeDropIndex(Log.collection, 'schoolId_1'),
+            safeDropIndex(Log.collection, 'academicYear_1'),
         ]);
 
         await SchoolWorkspace.collection.createIndex({ schoolId: 1 }, { unique: true });

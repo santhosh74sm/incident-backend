@@ -75,6 +75,14 @@ const getIncidents = async (req, res, next) => {
     }
 };
 
+const getIncidentSummary = async (req, res, next) => {
+    try {
+        res.json(await incidentService.getIncidentSummary({ user: req.user, query: req.query }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2.1. Location Distribution
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,6 +91,22 @@ const getIncidentLocationDistribution = async (req, res, next) => {
     try {
         const data = await incidentService.getLocationDistribution({ user: req.user, query: req.query });
         res.json(data);
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getProfessionalAnalytics = async (req, res, next) => {
+    try {
+        res.json(await incidentService.getProfessionalAnalytics({ user: req.user, query: req.query }));
+    } catch (error) {
+        next(error);
+    }
+};
+
+const getProfessionalAnalyticsDetails = async (req, res, next) => {
+    try {
+        res.json(await incidentService.getProfessionalAnalyticsDetails({ user: req.user, query: req.query }));
     } catch (error) {
         next(error);
     }
@@ -310,7 +334,10 @@ const updateIncidentDescription = async (req, res, next) => {
 module.exports = {
     createIncident,
     getIncidents,
+    getIncidentSummary,
     getIncidentLocationDistribution,
+    getProfessionalAnalytics,
+    getProfessionalAnalyticsDetails,
     getIncidentById,
     markIncidentRead,
     approveAndAssign,
