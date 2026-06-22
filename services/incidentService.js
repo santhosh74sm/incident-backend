@@ -619,7 +619,6 @@ const createIncidents = async ({ body, files, user }) => {
     try { evidenceList = JSON.parse(body.evidenceDetails || '[]'); } catch { evidenceList = []; }
     const evidence = buildEvidenceEntriesFromUploads(files || [], evidenceList);
 
-    const isAdmin = isAdministrationRole(user.role);
     const cls = Array.isArray(body.class) ? body.class[0] : body.class;
     const sec = Array.isArray(body.section) ? body.section[0] : body.section;
 
@@ -654,8 +653,8 @@ const createIncidents = async ({ body, files, user }) => {
             reportedBy: user.id,
             submittedAt: manualOpenedAt || Date.now(),
             incidentDate: manualOpenedAt || Date.now(),
-            approvalStatus: isAdmin ? 'Approved' : 'Pending',
-            approvedAt: isAdmin ? Date.now() : null,
+            approvalStatus: 'Approved',
+            approvedAt: Date.now(),
             status: useManualTiming ? initialStatus : 'Open',
             evidence,
             admissionNo: studentSnapshot.admissionNo,
