@@ -445,8 +445,6 @@ const updateUser = async ({ id, input, actor }) => {
                 await ensureAtLeastOneSuperAdminRemains({ user, nextRole: requestedRole, actionLabel: 'change the role of' });
             }
 
-            const previousEmail = user.email;
-            const previousName = user.name;
             const isSuperAdminAccount = toClientRole(user.role) === 'Super Admin';
             const normalizedEmail = input.email ? String(input.email).trim().toLowerCase() : undefined;
             if (normalizedEmail && normalizedEmail !== user.email) {
@@ -481,11 +479,11 @@ const updateUser = async ({ id, input, actor }) => {
             await user.save({ session });
 
             const workspaceSet = {};
-            if (normalizedEmail && normalizedEmail !== previousEmail) {
-                workspaceSet.email = normalizedEmail;
+            if (normalizedEmail !== undefined) {
+                workspaceSet.email = user.email;
             }
-            if (normalizedName !== undefined && normalizedName !== previousName) {
-                workspaceSet.superAdminName = normalizedName;
+            if (normalizedName !== undefined) {
+                workspaceSet.superAdminName = user.name;
             }
 
             if (isSuperAdminAccount && Object.keys(workspaceSet).length > 0) {

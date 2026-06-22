@@ -792,13 +792,18 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
             } catch (error) {
                 const writeErrors = error?.writeErrors || error?.result?.getWriteErrors?.() || [];
                 if (!writeErrors.length) throw error;
+                const hasWriteConcernFailure = Boolean(
+                    error?.writeConcernError
+                    || error?.result?.getWriteConcernError?.()
+                    || error?.result?.getWriteConcernErrors?.()?.length
+                );
+                if (hasWriteConcernFailure) throw error;
                 writeErrors.forEach((writeError) => {
                     const index = Number(writeError.index);
-                    if (Number.isInteger(index)) {
-                        failedOperationIndexes.add(index);
-                        const row = prepared[index]?.row;
-                        failedRows.push(`Row ${row?.rowNum || batchStart + index + 2}: ${writeError.errmsg || writeError.message || 'Database write failed'}`);
-                    }
+                    if (!Number.isInteger(index) || !prepared[index]) throw error;
+                    failedOperationIndexes.add(index);
+                    const row = prepared[index].row;
+                    failedRows.push(`Row ${row?.rowNum || batchStart + index + 2}: ${writeError.errmsg || writeError.message || 'Database write failed'}`);
                 });
             }
 

@@ -303,6 +303,34 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         }
 
         const letterNumber = await IssuedLetter.generateLetterNumber(incident.schoolId);
+        let storedDocument = {
+            generatedDocx: outputBuffer,
+            generatedDocxKey: '',
+            generatedDocxUrl: '',
+        };
+
+        if (s3StorageService.isConfigured()) {
+            try {
+                const uploaded = await s3StorageService.uploadBuffer({
+                    buffer: outputBuffer,
+                    folder: schoolScopedKey(incident.schoolId, 'issued-letters'),
+                    filename: `${letterNumber}.docx`,
+                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                });
+                storedDocument = {
+                    generatedDocx: null,
+                    generatedDocxKey: uploaded.key,
+                    generatedDocxUrl: uploaded.url,
+                };
+            } catch (uploadError) {
+                logger.warn('Issued letter S3 upload failed; using MongoDB document fallback', {
+                    incidentId: incident._id,
+                    letterNumber,
+                    error: uploadError?.message,
+                });
+            }
+        }
+
         const issuedLetter = new IssuedLetter({
             schoolId: incident.schoolId,
             academicYear: incident.academicYear || '',
@@ -315,15 +343,29 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             incidentCategory: incident.category,
             templateId: matchingTemplate._id,
             title: matchingTemplate.title,
-            generatedDocx: outputBuffer,
-            generatedDocxKey: '',
-            generatedDocxUrl: '',
+            ...storedDocument,
             issuedBy: userId,
             status: 'Issued',
             language,
         });
 
-        await issuedLetter.save();
+        try {
+            await issuedLetter.save();
+        } catch (saveError) {
+            if (storedDocument.generatedDocxKey) {
+                try {
+                    await s3StorageService.deleteObject(storedDocument.generatedDocxKey);
+                } catch (cleanupError) {
+                    logger.error('Issued letter rollback could not remove uploaded S3 object', {
+                        incidentId: incident._id,
+                        letterNumber,
+                        key: storedDocument.generatedDocxKey,
+                        error: cleanupError?.message,
+                    });
+                }
+            }
+            throw saveError;
+        }
 
         if (!skipLog) {
             try {
@@ -671,7 +713,10 @@ const deleteIssuedLetter = async (id, user) => {
         throw err;
     }
 
+    let s3Backup = null;
     if (letter.generatedDocxKey) {
+        s3Backup = await s3StorageService.getBuffer(letter.generatedDocxKey);
+        validateDocxBuffer(s3Backup);
         await deleteS3ObjectOrThrow(letter.generatedDocxKey, {
             operation: 'deleteIssuedLetter',
             letterId: id,
@@ -680,8 +725,35 @@ const deleteIssuedLetter = async (id, user) => {
         });
     }
 
-    if (schoolId) await IssuedLetter.findOneAndDelete(tenantFilter(user, { _id: id }));
-    else await IssuedLetter.findByIdAndDelete(id);
+    try {
+        const deletedLetter = schoolId
+            ? await IssuedLetter.findOneAndDelete(tenantFilter(user, { _id: id }))
+            : await IssuedLetter.findByIdAndDelete(id);
+        if (!deletedLetter) throw new Error('Letter disappeared before it could be deleted.');
+    } catch (databaseError) {
+        if (letter.generatedDocxKey && s3Backup) {
+            try {
+                await s3StorageService.uploadBuffer({
+                    buffer: s3Backup,
+                    key: letter.generatedDocxKey,
+                    filename: `${letter.letterNumber || 'issued-letter'}.docx`,
+                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                });
+            } catch (restoreError) {
+                logger.error('Issued letter delete rollback could not restore S3 object', {
+                    letterId: id,
+                    letterNumber: letter.letterNumber,
+                    key: letter.generatedDocxKey,
+                    databaseError: databaseError?.message,
+                    restoreError: restoreError?.message,
+                });
+                const consistencyError = new Error('Letter deletion failed and its stored document could not be restored.');
+                consistencyError.statusCode = 500;
+                throw consistencyError;
+            }
+        }
+        throw databaseError;
+    }
 
     createLog('Letter Deleted', user, 'Letter', letter._id, {
         letterNumber: letter.letterNumber,
@@ -749,9 +821,23 @@ const getLetterDocxDownload = async (id, user) => {
         throw err;
     }
 
-    const buffer = letter.generatedDocxKey
-        ? await s3StorageService.getBuffer(letter.generatedDocxKey)
-        : letter.generatedDocx;
+    let buffer = letter.generatedDocx;
+    if (letter.generatedDocxKey) {
+        try {
+            buffer = await s3StorageService.getBuffer(letter.generatedDocxKey);
+        } catch (storageError) {
+            if (!buffer) {
+                storageError.statusCode = storageError.statusCode || 502;
+                throw storageError;
+            }
+            logger.warn('Issued letter S3 download failed; using MongoDB document fallback', {
+                letterId: letter._id,
+                key: letter.generatedDocxKey,
+                error: storageError?.message,
+            });
+        }
+    }
+    validateDocxBuffer(buffer);
 
     return {
         buffer,

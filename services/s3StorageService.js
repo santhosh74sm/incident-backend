@@ -47,8 +47,19 @@ const sanitizeDispositionFilename = (filename) => {
     return base || 'file';
 };
 
+const assertStorageKey = (key) => {
+    const value = String(key || '').replace(/^\/+/, '');
+    if (!value || value.includes('..') || value.includes('\\')) {
+        throw new Error('A valid S3 object key is required.');
+    }
+    return value;
+};
+
 const uploadBuffer = async ({ buffer, key, folder = 'uploads', filename, contentType }) => {
-    const s3Key = key || buildRandomKey(folder, filename);
+    if (!buffer || typeof buffer.length !== 'number' || buffer.length === 0) {
+        throw new Error('Cannot upload an empty file to S3.');
+    }
+    const s3Key = assertStorageKey(key || buildRandomKey(folder, filename));
     const safeFilename = sanitizeDispositionFilename(filename || path.basename(s3Key));
 
     await s3.send(new PutObjectCommand({
@@ -66,18 +77,20 @@ const uploadBuffer = async ({ buffer, key, folder = 'uploads', filename, content
 };
 
 const getBuffer = async (key) => {
+    const safeKey = assertStorageKey(key);
     const result = await s3.send(new GetObjectCommand({
         Bucket: getBucketName(),
-        Key: key,
+        Key: safeKey,
     }));
 
     return streamToBuffer(result.Body);
 };
 
 const getObjectStream = async (key) => {
+    const safeKey = assertStorageKey(key);
     const result = await s3.send(new GetObjectCommand({
         Bucket: getBucketName(),
-        Key: key,
+        Key: safeKey,
     }));
 
     return {
@@ -112,10 +125,11 @@ const listKeysByPrefix = async (prefix) => {
 
 const deleteObject = async (key) => {
     if (!key) return;
+    const safeKey = assertStorageKey(key);
 
     await s3.send(new DeleteObjectCommand({
         Bucket: getBucketName(),
-        Key: key,
+        Key: safeKey,
     }));
 };
 
