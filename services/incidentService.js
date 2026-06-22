@@ -361,7 +361,11 @@ const buildIncidentQuery = async (user, query) => {
     }
 
     if (OPERATIONAL_ROLES.includes(user.role)) {
-        baseConditions.push({ $or: [{ reportedBy: user.id }, { assignedHandler: user.id }] });
+        const userId = getUserId(user);
+        const scopedUserId = mongoose.Types.ObjectId.isValid(userId)
+            ? new mongoose.Types.ObjectId(userId)
+            : userId;
+        baseConditions.push({ $or: [{ reportedBy: scopedUserId }, { assignedHandler: scopedUserId }] });
     }
 
     const classes = parseAliasedListParam(query, ['classes', 'class', 'className']);
