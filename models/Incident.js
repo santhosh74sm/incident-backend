@@ -30,11 +30,6 @@ const incidentSchema = new mongoose.Schema(
             default: 'Low',
         },
         isHighPriority: { type: Boolean, default: false },
-        approvalStatus: {
-            type: String,
-            enum: ['Pending', 'Approved', 'Rejected'],
-            default: 'Pending',
-        },
         status: {
             type: String,
             enum: ['Open', 'In Progress', 'Closed'],
@@ -59,7 +54,6 @@ const incidentSchema = new mongoose.Schema(
         closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         submittedAt: { type: Date, default: Date.now },
         incidentDate: { type: Date, default: Date.now },
-        approvedAt: { type: Date },
         progressAt: { type: Date },
         openedAt: { type: Date },
         inProgressAt: { type: Date },
@@ -89,7 +83,6 @@ incidentSchema.index({ schoolId: 1, reportedBy: 1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, class: 1, section: 1 });
 incidentSchema.index({ schoolId: 1, status: 1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, assignedHandler: 1, status: 1 });
-incidentSchema.index({ schoolId: 1, approvalStatus: 1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, incidentDate: -1, createdAt: -1 });
 incidentSchema.index({ schoolId: 1, category: 1, status: 1 });
 incidentSchema.index({ schoolId: 1, location: 1 });

@@ -621,12 +621,14 @@ const createIncidents = async ({ body, files, user }) => {
 
     const cls = Array.isArray(body.class) ? body.class[0] : body.class;
     const sec = Array.isArray(body.section) ? body.section[0] : body.section;
+    const isTeacherCreator = OPERATIONAL_ROLES.includes(user.role);
 
     const ALLOWED_FIELDS = ['category', 'description', 'location', 'severity', 'isHighPriority', 'highPriority', 'assignedHandler'];
     const incidentData = Object.fromEntries(
         Object.entries(body).filter(([key]) => ALLOWED_FIELDS.includes(key))
     );
     if (!incidentData.assignedHandler) delete incidentData.assignedHandler;
+    if (isTeacherCreator) incidentData.assignedHandler = user.id;
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
     const initialStatus = body.initialStatus || 'Open';
@@ -653,8 +655,6 @@ const createIncidents = async ({ body, files, user }) => {
             reportedBy: user.id,
             submittedAt: manualOpenedAt || Date.now(),
             incidentDate: manualOpenedAt || Date.now(),
-            approvalStatus: 'Approved',
-            approvedAt: Date.now(),
             status: useManualTiming ? initialStatus : 'Open',
             evidence,
             admissionNo: studentSnapshot.admissionNo,
@@ -690,6 +690,8 @@ const createIncidents = async ({ body, files, user }) => {
                 buildIncidentMetadata(incident, {
                     category: body.category,
                     reportedBy: user.name,
+                    assignedTo: isTeacherCreator ? user.name : undefined,
+                    assignedHandler: incident.assignedHandler || null,
                     isBulkSubmission,
                     batchCount: createdIncidents.length,
                     academicYear,
@@ -1072,7 +1074,7 @@ const markIncidentRead = async (incidentId, user) => {
     return { incidentId, readByCurrentUser: true, readAt };
 };
 
-const approveAndAssign = async (incidentId, handlerId, user) => {
+const assignIncident = async (incidentId, handlerId, user) => {
     const incident = await Incident.findOne(tenantFilter(user, { _id: incidentId }));
     if (!incident) {
         const err = new Error('Incident not found');
@@ -1080,12 +1082,19 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
         throw err;
     }
 
-    incident.approvalStatus = 'Approved';
-    incident.approvedAt = Date.now();
+    const handler = await User.findOne(tenantFilter(user, { _id: handlerId, role: { $nin: ADMIN_ROLES } }))
+        .select('_id')
+        .lean();
+    if (!handler) {
+        const err = new Error('Incidents can only be assigned to non-admin staff users.');
+        err.statusCode = 400;
+        throw err;
+    }
+
     incident.assignedHandler = handlerId;
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
-        note: 'COMMAND AUTHORIZED: CASE ASSIGNED TO HANDLER FOR INVESTIGATION.',
+        note: 'CASE ASSIGNED TO HANDLER.',
         updatedBy: `${user.name} (Admin)`,
         timestamp: Date.now(),
     });
@@ -1095,7 +1104,7 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
     const reporterId = incident.reportedBy?._id || incident.reportedBy;
 
     createLog(
-        'Incident Authorized & Assigned',
+        'Incident Assigned',
         user,
         'Incident',
         incident._id,
@@ -1109,12 +1118,12 @@ const approveAndAssign = async (incidentId, handlerId, user) => {
             studentDetails: buildIncidentStudentDetails(incident),
             recipientEntries: [
                 handlerId ? { recipient: handlerId, actionName: 'Incident Assigned', message: `Admin ${user.name} assigned you a new incident: "${incident.title}".` } : null,
-                reporterId ? { recipient: reporterId, actionName: 'Incident Authorized', message: `Your incident "${incident.title}" has been authorized and assigned for investigation.` } : null,
+                reporterId ? { recipient: reporterId, actionName: 'Incident Assigned', message: `Your incident "${incident.title}" was assigned for handling.` } : null,
             ].filter(Boolean),
         }
     );
 
-    return { message: 'Incident authorized and assigned.' };
+    return { message: 'Incident assigned.' };
 };
 
 const addProgressNote = async (incidentId, note, user) => {
@@ -1225,7 +1234,7 @@ const finalizeClosure = async (incidentId, note, user) => {
     incident.closureRequested = false;
     incident.rejectionReason = null;
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: note || 'CASE PERMANENTLY SEALED: Admin authorized final closure.', updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
+    incident.progressLogs.push({ note: note || 'CASE PERMANENTLY SEALED: Admin finalized closure.', updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
 
     await incident.save();
 
@@ -1629,9 +1638,9 @@ const processExcelUpload = async (filePath, user, body) => {
         }
         if (hasInvalidEvidence) continue;
 
-        let assignedHandler = null;
+        let assignedHandler = OPERATIONAL_ROLES.includes(user.role) ? user.id : null;
         const handledByInput = getCellValue('handledBy', 'handledBy (Staff Email)', 'assignedby', 'assignee');
-        if (handledByInput) {
+        if (handledByInput && isAdministrationRole(user.role)) {
             const handler = userMap.get(handledByInput.toLowerCase().trim());
             if (!handler) { addFieldError('handledBy', `Staff "${handledByInput}" not found`); continue; }
             assignedHandler = handler._id;
@@ -1684,8 +1693,6 @@ const processExcelUpload = async (filePath, user, body) => {
             submittedAt: incidentRegisterDate,
             createdAt: incidentRegisterDate,
             incidentDate: incidentRegisterDate,
-            approvedAt: new Date(),
-            approvalStatus: 'Approved',
             status: 'Open',
             isHighPriority,
             assignedHandler,
@@ -1888,7 +1895,7 @@ module.exports = {
     getProfessionalAnalyticsDetails,
     getIncidentById,
     markIncidentRead,
-    approveAndAssign,
+    assignIncident,
     addProgressNote,
     requestClosure,
     finalizeClosure,

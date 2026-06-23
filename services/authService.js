@@ -22,6 +22,7 @@ const ROLE_MAP = {
 };
 
 const ADMIN_ROLES = ['Super Admin', 'Admin'];
+const ADMIN_ROLE_VALUES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
 const TEACHER_ROLES = ['Teacher', 'teacher'];
 const ACCOUNT_USER_ROLES = ['Super Admin', 'Admin', 'Teacher', 'super_admin', 'admin', 'teacher'];
 const EDITABLE_ROLES = ['Admin', 'Teacher'];
@@ -375,6 +376,18 @@ const getAllUsers = async ({ actor } = {}) => {
     }));
 };
 
+const getInvestigatorUsers = async ({ actor } = {}) => {
+    const users = await User.find(tenantFilter(actor, { role: { $nin: ADMIN_ROLE_VALUES } }))
+        .select('name email role schoolId')
+        .sort({ name: 1 })
+        .lean();
+
+    return users.map((user) => ({
+        ...user,
+        role: toClientRole(user.role),
+    }));
+};
+
 const deleteUser = async ({ id, actor }) => {
     const user = await User.findOne(tenantFilter(actor, { _id: id }));
 
@@ -709,6 +722,7 @@ module.exports = {
     loginUser,
     getCurrentUserResponse,
     getAllUsers,
+    getInvestigatorUsers,
     updateUser,
     deleteUser,
     resetUserPassword,

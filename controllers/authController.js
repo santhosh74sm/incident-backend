@@ -115,6 +115,14 @@ const getAllUsers = async (req, res, next) => {
     }
 };
 
+const getInvestigatorUsers = async (req, res, next) => {
+    try {
+        res.json(await authService.getInvestigatorUsers({ actor: req.user }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 const deleteUser = async (req, res, next) => {
     try {
         res.json(await authService.deleteUser({
@@ -223,6 +231,7 @@ module.exports = {
     loginUser,
     refreshSession,
     getAllUsers,
+    getInvestigatorUsers,
     updateUser,
     deleteUser,
     getMe,

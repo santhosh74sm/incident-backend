@@ -134,12 +134,12 @@ const markIncidentRead = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. Approve & Assign Handler
+// 4. Assign Handler
 // ─────────────────────────────────────────────────────────────────────────────
 
-const approveAndAssign = async (req, res, next) => {
+const assignIncident = async (req, res, next) => {
     try {
-        const result = await incidentService.approveAndAssign(req.params.id, req.body.handlerId, req.user);
+        const result = await incidentService.assignIncident(req.params.id, req.body.handlerId, req.user);
         res.json(result);
     } catch (error) {
         next(error);
@@ -340,7 +340,7 @@ module.exports = {
     getProfessionalAnalyticsDetails,
     getIncidentById,
     markIncidentRead,
-    approveAndAssign,
+    assignIncident,
     addProgressNote,
     requestClosure,
     finalizeClosure,

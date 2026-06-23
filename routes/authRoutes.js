@@ -6,6 +6,7 @@ const {
     createStaffUser,
     loginUser,
     getAllUsers,
+    getInvestigatorUsers,
     updateUser,
     deleteUser,
     getMe,
@@ -55,6 +56,7 @@ router.post('/change-password', protect, validate(changeStudentPasswordSchema), 
 
 router.post('/users', protect, authorize('Super Admin', 'Admin'), validate(registerSchema), createStaffUser);
 router.get('/users', protect, authorize('Super Admin', 'Admin', 'Teacher'), getAllUsers);
+router.get('/users/investigators', protect, authorize('Super Admin', 'Admin'), getInvestigatorUsers);
 router.post('/users/:id/reset-password', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), resetUserPassword);
 router.put('/users/:id', protect, validate(objectIdParamSchema, 'params'), validate(updateUserSchema), updateUser);
 router.delete('/users/:id', protect, authorize('Super Admin'), validate(objectIdParamSchema, 'params'), deleteUser);

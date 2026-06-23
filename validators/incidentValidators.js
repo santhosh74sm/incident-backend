@@ -8,7 +8,7 @@ const listIncidentsQuerySchema = optionalDateRangeQuerySchema.extend({
     academicYear: optionalString(20),
 }).passthrough();
 
-const approveAndAssignSchema = z.object({
+const assignIncidentSchema = z.object({
     handlerId: objectId,
 });
 
@@ -69,7 +69,7 @@ const createIncidentSchema = z.object({
 module.exports = {
     createIncidentSchema,
     listIncidentsQuerySchema,
-    approveAndAssignSchema,
+    assignIncidentSchema,
     progressNoteSchema,
     requestClosureSchema,
     finalizeClosureSchema,
