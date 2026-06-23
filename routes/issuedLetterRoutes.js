@@ -25,8 +25,8 @@ const {
 // All routes require authentication
 router.use(protect);
 
-// Get filters for dropdowns (Admin only)
-router.get('/filters', authorize('Super Admin', 'Admin'), getFilters);
+// Get filters for dropdowns
+router.get('/filters', authorize('Super Admin', 'Admin', 'Teacher'), getFilters);
 
 // Get letter status for multiple incidents (POST)
 router.post('/status/batch', validate(batchIncidentIdsSchema), getLetterStatusByIncidentIds);
@@ -37,17 +37,17 @@ router.get('/student/:admissionNo', validate(admissionNoParamSchema, 'params'), 
 // Get letters by incident ID (for incident detail page)
 router.get('/incident/:incidentId', validate(incidentIdParamSchema, 'params'), getLetterByIncident);
 
-// Download generated letter as DOCX (Admin only)
-router.get('/:id/download', authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), downloadIssuedLetter);
+// Download generated letter as DOCX
+router.get('/:id/download', authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), downloadIssuedLetter);
 
 // Letter management routes
 router.route('/')
-    .get(authorize('Super Admin', 'Admin'), validate(paginationQuerySchema, 'query'), getIssuedLetters)
+    .get(authorize('Super Admin', 'Admin', 'Teacher'), validate(paginationQuerySchema, 'query'), getIssuedLetters)
     .post(authorize('Super Admin', 'Admin', 'Teacher'), validate(createIssuedLetterSchema), createIssuedLetterFromIncident);
 
 router.route('/:id')
-    .get(authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), getIssuedLetterById)
-    .put(authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(updateIssuedLetterSchema), updateIssuedLetter)
-    .delete(authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), deleteIssuedLetter);
+    .get(authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), getIssuedLetterById)
+    .put(authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(updateIssuedLetterSchema), updateIssuedLetter)
+    .delete(authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), deleteIssuedLetter);
 
 module.exports = router;
