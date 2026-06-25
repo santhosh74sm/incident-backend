@@ -1082,7 +1082,18 @@ const assignIncident = async (incidentId, handlerId, user) => {
         throw err;
     }
 
-    const handler = await User.findOne(tenantFilter(user, { _id: handlerId, role: { $nin: ADMIN_ROLES } }))
+    const isSelfAssignment = isAdministrationRole(user?.role) && toIdString(handlerId) === getUserId(user);
+    if (toIdString(incident.assignedHandler) === toIdString(handlerId)) {
+        return {
+            message: isSelfAssignment ? 'Already assigned to you.' : 'Already assigned to selected investigator.',
+            alreadyAssigned: true,
+        };
+    }
+
+    const handlerQuery = isSelfAssignment
+        ? { _id: handlerId, role: { $in: ADMIN_ROLES } }
+        : { _id: handlerId, role: { $nin: ADMIN_ROLES } };
+    const handler = await User.findOne(tenantFilter(user, handlerQuery))
         .select('_id')
         .lean();
     if (!handler) {
