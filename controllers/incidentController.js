@@ -16,30 +16,12 @@ const { bulkQueue } = require('../utils/asyncQueue');
 
 const createIncident = async (req, res, next) => {
     try {
-        const { createdIncidents, failedStudents, generatedLetters, isBulkSubmission } = await incidentService.createIncidents({
+        const { createdIncidents, generatedLetters } = await incidentService.createIncidents({
             body: req.body,
             files: req.files,
             user: req.user,
         });
 
-        if (isBulkSubmission) {
-            return res.status(201).json({
-                success: true,
-                createdCount: createdIncidents.length,
-                failedCount: failedStudents.length,
-                failedStudents,
-                lettersGenerated: generatedLetters.length,
-                incidents: createdIncidents.map((i) => ({ id: i._id, admissionNo: i.admissionNo, studentsInvolved: i.studentsInvolved })),
-                letterGenerated: generatedLetters.length > 0 ? {
-                    id: generatedLetters[0]._id,
-                    letterNumber: generatedLetters[0].letterNumber,
-                    templateName: generatedLetters[0].templateName || generatedLetters[0].title,
-                } : null,
-                message: `Incidents and letters created for ${createdIncidents.length} student${createdIncidents.length !== 1 ? 's' : ''}${failedStudents.length > 0 ? ` (${failedStudents.length} failed)` : ''}.`,
-            });
-        }
-
-        // Single incident response (legacy)
         const incident = createdIncidents[0];
         const letterGenerated = generatedLetters.length > 0 ? {
             id: generatedLetters[0]._id,

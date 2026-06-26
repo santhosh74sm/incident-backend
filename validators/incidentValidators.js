@@ -3,6 +3,8 @@ const { objectId, optionalDateRangeQuerySchema, templateFormatQuerySchema } = re
 
 const optionalBoolean = z.union([z.boolean(), z.enum(['true', 'false'])]).optional();
 const optionalString = (max = 500) => z.coerce.string().trim().max(max).optional();
+const optionalScalarString = (max = 500) =>
+    z.string().trim().max(max).optional();
 
 const listIncidentsQuerySchema = optionalDateRangeQuerySchema.extend({
     academicYear: optionalString(20),
@@ -42,9 +44,10 @@ const evidenceParamSchema = z.object({
 });
 
 const createIncidentSchema = z.object({
-    studentIds: optionalString(5000),
-    studentsInvolved: optionalString(5000),
-    admissionNo: optionalString(80),
+    studentId: optionalScalarString(80),
+    studentIds: z.any().optional(),
+    studentsInvolved: z.any().optional(),
+    admissionNo: optionalScalarString(80),
     evidence: optionalString(10000),
     evidenceDetails: optionalString(10000),
     category: z.coerce.string().trim().min(1).max(120),
@@ -64,6 +67,43 @@ const createIncidentSchema = z.object({
     openedAt: optionalString(80),
     inProgressAt: optionalString(80),
     closedAt: optionalString(80),
+}).superRefine((data, ctx) => {
+    if (data.studentIds !== undefined && String(data.studentIds || '').trim() !== '') {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['studentIds'],
+            message: 'Manual incident creation accepts exactly one student. Please send studentId, not studentIds.',
+        });
+    }
+
+    if (Array.isArray(data.studentsInvolved)) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['studentsInvolved'],
+            message: 'Manual incident creation accepts exactly one student.',
+        });
+    } else if (typeof data.studentsInvolved === 'string') {
+        try {
+            const parsed = JSON.parse(data.studentsInvolved);
+            if (Array.isArray(parsed)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['studentsInvolved'],
+                    message: 'Manual incident creation accepts exactly one student.',
+                });
+            }
+        } catch {
+            // Plain scalar names are allowed for legacy clients; the service derives the saved value from the student record.
+        }
+    }
+
+    if (!data.studentId && !data.admissionNo) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['studentId'],
+            message: 'Please select a student.',
+        });
+    }
 });
 
 module.exports = {

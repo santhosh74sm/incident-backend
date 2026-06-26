@@ -597,20 +597,46 @@ const createIncidents = async ({ body, files, user }) => {
     const academicYear = body.academicYear
         ? validateAcademicYear(body.academicYear)
         : await getCurrentAcademicYear(user);
-    let studentIds = [];
-    try { studentIds = body.studentIds ? JSON.parse(body.studentIds) : []; } catch { studentIds = []; }
-    const isBulkSubmission = Array.isArray(studentIds) && studentIds.length > 0;
 
-    let studentDetails = [];
-    if (isBulkSubmission) {
-        studentDetails = await Student.find({ schoolId: user.schoolId, _id: { $in: studentIds } }).lean();
-    } else if (body.admissionNo) {
-        const student = await Student.findOne({ schoolId: user.schoolId, admissionNo: body.admissionNo }).lean();
-        if (student) studentDetails = [student];
+    if (body.studentIds !== undefined && String(body.studentIds || '').trim() !== '') {
+        const err = new Error('Manual incident creation accepts exactly one student.');
+        err.statusCode = 400;
+        throw err;
     }
 
-    if (studentDetails.length === 0) {
-        const err = new Error('No valid students found');
+    if (Array.isArray(body.studentsInvolved)) {
+        const err = new Error('Manual incident creation accepts exactly one student.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (typeof body.studentsInvolved === 'string') {
+        try {
+            if (Array.isArray(JSON.parse(body.studentsInvolved))) {
+                const err = new Error('Manual incident creation accepts exactly one student.');
+                err.statusCode = 400;
+                throw err;
+            }
+        } catch (error) {
+            if (error.statusCode) throw error;
+        }
+    }
+
+    const studentQuery = body.studentId
+        ? { schoolId: user.schoolId, _id: body.studentId }
+        : body.admissionNo
+            ? { schoolId: user.schoolId, admissionNo: body.admissionNo }
+            : null;
+
+    if (!studentQuery) {
+        const err = new Error('Please select a student.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const student = await Student.findOne(studentQuery).lean();
+    if (!student) {
+        const err = new Error('Selected student was not found.');
         err.statusCode = 400;
         throw err;
     }
@@ -640,65 +666,53 @@ const createIncidents = async ({ body, files, user }) => {
     const letterLanguage = body.letterLanguage || 'en';
 
     const createdIncidents = [];
-    const failedStudents = [];
     const generatedLetters = [];
-    const incidentsToInsert = [];
 
-    for (const student of studentDetails) {
-        const studentSnapshot = getStudentSnapshotForAcademicYear(student, academicYear);
-        incidentsToInsert.push({
-            schoolId: user.schoolId,
-            academicYear,
-            ...incidentData,
-            title: body.category,
-            incidentCategory: body.category,
-            reportedBy: user.id,
-            submittedAt: manualOpenedAt || Date.now(),
-            incidentDate: manualOpenedAt || Date.now(),
-            status: useManualTiming ? initialStatus : 'Open',
-            evidence,
+    const studentSnapshot = getStudentSnapshotForAcademicYear(student, academicYear);
+    const incident = await Incident.create({
+        schoolId: user.schoolId,
+        academicYear,
+        ...incidentData,
+        title: body.category,
+        incidentCategory: body.category,
+        reportedBy: user.id,
+        submittedAt: manualOpenedAt || Date.now(),
+        incidentDate: manualOpenedAt || Date.now(),
+        status: useManualTiming ? initialStatus : 'Open',
+        evidence,
+        admissionNo: studentSnapshot.admissionNo,
+        student: student._id,
+        class: studentSnapshot.className || cls,
+        section: studentSnapshot.section || sec,
+        studentsInvolved: [studentSnapshot.name],
+        studentSnapshot: {
+            name: studentSnapshot.name,
             admissionNo: studentSnapshot.admissionNo,
-            student: student._id,
-            class: studentSnapshot.className || cls,
-            section: studentSnapshot.section || sec,
-            studentsInvolved: [studentSnapshot.name],
-            studentSnapshot: {
-                name: studentSnapshot.name,
-                admissionNo: studentSnapshot.admissionNo,
-                className: studentSnapshot.className || cls || '',
-                section: studentSnapshot.section || sec || '',
-                academicYear,
-            },
-            ...(useManualTiming && {
-                openedAt: manualOpenedAt || Date.now(),
-                ...(manualInProgressAt && { progressAt: manualInProgressAt, inProgressAt: manualInProgressAt }),
-                ...(manualClosedAt && { closedAt: manualClosedAt, closureRequestedAt: manualClosedAt }),
-            }),
-        });
-    }
+            className: studentSnapshot.className || cls || '',
+            section: studentSnapshot.section || sec || '',
+            academicYear,
+        },
+        ...(useManualTiming && {
+            openedAt: manualOpenedAt || Date.now(),
+            ...(manualInProgressAt && { progressAt: manualInProgressAt, inProgressAt: manualInProgressAt }),
+            ...(manualClosedAt && { closedAt: manualClosedAt, closureRequestedAt: manualClosedAt }),
+        }),
+    });
+    createdIncidents.push(incident);
 
-    if (incidentsToInsert.length > 0) {
-        const inserted = await Incident.insertMany(incidentsToInsert);
-        createdIncidents.push(...inserted);
-
-        createdIncidents.forEach((incident) => {
-            createLog(
-                useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
-                user,
-                'Incident',
-                incident._id,
-                buildIncidentMetadata(incident, {
-                    category: body.category,
-                    reportedBy: user.name,
-                    assignedTo: isTeacherCreator ? user.name : undefined,
-                    assignedHandler: incident.assignedHandler || null,
-                    isBulkSubmission,
-                    batchCount: createdIncidents.length,
-                    academicYear,
-                })
-            );
-        });
-    }
+    createLog(
+        useManualTiming ? 'Manual Incident Created (Custom Timing Used)' : 'Manual Incident Created',
+        user,
+        'Incident',
+        incident._id,
+        buildIncidentMetadata(incident, {
+            category: body.category,
+            reportedBy: user.name,
+            assignedTo: isTeacherCreator ? user.name : undefined,
+            assignedHandler: incident.assignedHandler || null,
+            academicYear,
+        })
+    );
 
     if (shouldGenerate) {
         for (const incident of createdIncidents) {
@@ -719,7 +733,7 @@ const createIncidents = async ({ body, files, user }) => {
         // Non-fatal
     }
 
-    return { createdIncidents, failedStudents, generatedLetters, isBulkSubmission };
+    return { createdIncidents, generatedLetters };
 };
 
 const listIncidents = async ({ user, query, maxLimit = 100 }) => {
