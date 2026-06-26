@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { 
     getFilters, getAllStudents, getStudentsByFilter, 
-    deleteStudent, previewStudentDelete, uploadStudents, createStudent,
+    deleteStudent, previewStudentDelete, uploadStudents, getStudentUploadStatus, createStudent,
     updateStudent, getStudentBehavioralSummary
 } = require('../controllers/studentController');
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -22,6 +22,7 @@ router.post('/', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 router.post('/upload', protect, authorize('Super Admin', 'Admin', 'Teacher'), upload.local.single('file'), upload.validateFileTypes, uploadStudents);
+router.get('/upload/:jobId', protect, authorize('Super Admin', 'Admin', 'Teacher'), getStudentUploadStatus);
 
 // ─── Dynamic ID routes ────────────────────────────────────────────────────────
 router.get('/:id/behavioral-summary', protect, validate(objectIdParamSchema, 'params'), getStudentBehavioralSummary);

@@ -24,6 +24,7 @@ const {
     assignIncident,
     deleteIncident,
     uploadIncidents,
+    getBulkUploadStatus,
     downloadTemplate,
     rejectClosure,
     exportIncidentReport,
@@ -99,6 +100,7 @@ router.post(
     upload.validateFileTypes,
     uploadIncidents
 );
+router.get('/upload/:jobId', protect, getBulkUploadStatus);
 
 // ─── Collection routes ────────────────────────────────────────────────────────
 router

@@ -6,7 +6,6 @@ const generateToken = require('../config/generateToken');
 const AppError = require('../utils/AppError');
 
 const refreshTokenTtlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS) || 30;
-const refreshReuseGraceMs = Number(process.env.REFRESH_REUSE_GRACE_MS) || 5000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
@@ -52,51 +51,65 @@ const issueSession = async ({ user, type, req }) => ({
     refreshToken: await createRefreshSession({ user, type, req }),
 });
 
+const revokeActiveFamilySessions = async (familyId, update = {}) => {
+    await RefreshToken.updateMany(
+        { familyId, revokedAt: null },
+        { revokedAt: new Date(), ...update }
+    );
+};
+
 const rotateRefreshSession = async ({ rawRefreshToken, req }) => {
     if (!rawRefreshToken) {
         throw new AppError('Refresh token missing', 401);
     }
 
     const tokenHash = hashToken(rawRefreshToken);
-    const session = await RefreshToken.findOne({ tokenHash }).exec();
+    const claimedAt = new Date();
+    const session = await RefreshToken.findOneAndUpdate(
+        { tokenHash, revokedAt: null },
+        { revokedAt: claimedAt, revokedReason: 'rotated' },
+        { returnDocument: 'after' }
+    ).exec();
 
     if (!session) {
-        throw new AppError('Refresh session not found', 401);
-    }
+        const existingSession = await RefreshToken.findOne({ tokenHash }).exec();
 
-    if (session.revokedAt) {
-        const revokedRecently = Date.now() - new Date(session.revokedAt).getTime() <= refreshReuseGraceMs;
-        if (session.replacedBy && revokedRecently) {
-            throw new AppError('Refresh already rotated in another tab', 409, 'REFRESH_RETRY_GRACE');
+        if (!existingSession) {
+            throw new AppError('Refresh session not found', 401);
         }
 
-        session.reuseDetectedAt = new Date();
-        await session.save();
-        await RefreshToken.updateMany(
-            { familyId: session.familyId, revokedAt: null },
-            { revokedAt: new Date(), reuseDetectedAt: new Date() }
-        );
+        if (existingSession.revokedReason === 'rotated' || existingSession.replacedBy) {
+            throw new AppError('Refresh session already rotated', 401);
+        }
+
+        existingSession.reuseDetectedAt = new Date();
+        await existingSession.save();
+        await revokeActiveFamilySessions(existingSession.familyId, {
+            reuseDetectedAt: new Date(),
+            revokedReason: 'reuse_detected',
+        });
         throw new AppError('Refresh session reused', 401);
     }
 
     if (session.expiresAt <= new Date()) {
         session.reuseDetectedAt = new Date();
+        session.revokedReason = 'expired';
         await session.save();
-        await RefreshToken.updateMany(
-            { familyId: session.familyId, revokedAt: null },
-            { revokedAt: new Date(), reuseDetectedAt: new Date() }
-        );
+        await revokeActiveFamilySessions(session.familyId, {
+            reuseDetectedAt: new Date(),
+            revokedReason: 'expired',
+        });
         throw new AppError('Refresh session expired', 401);
     }
 
     const user = await findUser(session.user, session.type);
     if (!user) {
-        await RefreshToken.updateMany({ familyId: session.familyId, revokedAt: null }, { revokedAt: new Date() });
+        await revokeActiveFamilySessions(session.familyId, { revokedReason: 'account_not_found' });
         throw new AppError('Account not found', 401);
     }
 
     if ((user.tokenVersion ?? 0) !== (session.tokenVersion ?? 0)) {
-        await RefreshToken.updateMany({ familyId: session.familyId, revokedAt: null }, { revokedAt: new Date() });
+        await revokeActiveFamilySessions(session.familyId, { revokedReason: 'token_version_mismatch' });
         throw new AppError('Session invalidated', 401);
     }
 
@@ -107,7 +120,6 @@ const rotateRefreshSession = async ({ rawRefreshToken, req }) => {
         familyId: session.familyId,
     });
 
-    session.revokedAt = new Date();
     session.replacedBy = hashToken(nextRawToken);
     await session.save();
 

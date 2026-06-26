@@ -11,6 +11,7 @@ const refreshTokenSchema = new mongoose.Schema(
         tokenVersion: { type: Number, default: 0 },
         expiresAt: { type: Date, required: true, index: true },
         revokedAt: { type: Date, default: null },
+        revokedReason: { type: String, default: null },
         replacedBy: { type: String, default: null },
         reuseDetectedAt: { type: Date, default: null },
         ipAddress: { type: String, default: null },

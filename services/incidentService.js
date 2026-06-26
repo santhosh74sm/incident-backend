@@ -1490,10 +1490,33 @@ const updateDescription = async (incidentId, description, user) => {
 // Bulk Excel upload
 // ─────────────────────────────────────────────────────────────────────────────
 
-const processExcelUpload = async (filePath, user, body) => {
+const processExcelUpload = async (filePath, user, body, options = {}) => {
+    const startedAt = Date.now();
+    const timings = {
+        excelParsingMs: 0,
+        validationMs: 0,
+        incidentCreationMs: 0,
+        letterGenerationMs: 0,
+        auditLogCreationMs: 0,
+        notificationCreationMs: 0,
+        totalMs: 0,
+    };
+    const markTiming = (key, start) => {
+        timings[key] += Date.now() - start;
+    };
+    const completeTimings = () => {
+        timings.totalMs = Date.now() - startedAt;
+        return timings;
+    };
+    const reportProgress = (stage, percent) => {
+        if (typeof options.onProgress === 'function') {
+            options.onProgress({ stage, percent });
+        }
+    };
     let workbook;
     let data = [];
 
+    const parseStartedAt = Date.now();
     try {
         workbook = XLSX.readFile(filePath, { cellFormula: false, cellHTML: false, cellNF: false });
         const sheetName = workbook.SheetNames[0];
@@ -1504,19 +1527,25 @@ const processExcelUpload = async (filePath, user, body) => {
             const err = new Error('Excel file contains embedded images or objects that cannot be processed. Please remove all images from the Excel file and try again.');
             err.statusCode = 400;
             err.hint = 'Use a plain Excel file without any embedded images, icons, or drawings.';
+            err.timings = completeTimings();
             throw err;
         }
         const err = new Error('Failed to read Excel file: ' + readErr.message);
         err.statusCode = 400;
+        err.timings = completeTimings();
         throw err;
     }
+    markTiming('excelParsingMs', parseStartedAt);
+    reportProgress('Validating spreadsheet rows', 15);
 
     if (data.length === 0) {
         const err = new Error('Excel file is empty');
         err.statusCode = 400;
+        err.timings = completeTimings();
         throw err;
     }
 
+    const validationStartedAt = Date.now();
     const categorySet = new Set();
     const locationSet = new Set();
     const evidenceTypeSet = new Set();
@@ -1576,7 +1605,7 @@ const processExcelUpload = async (filePath, user, body) => {
     const incidents = [];
     const errors = [];
     const validationResults = { totalRows: data.length, successRows: 0, failedRows: 0, errors: [] };
-    const seenAdmissionRows = new Map();
+    const seenIncidentRows = new Map();
     const currentAcademicYear = await getCurrentAcademicYear(user);
     const uploadAcademicYear = body?.academicYear
         ? validateAcademicYear(body.academicYear)
@@ -1591,6 +1620,8 @@ const processExcelUpload = async (filePath, user, body) => {
             failedRows: data.length,
             errors: [{ row: 'Upload', reason: err.message, column: 'academicYear' }],
         };
+        markTiming('validationMs', validationStartedAt);
+        err.timings = completeTimings();
         throw err;
     }
 
@@ -1617,6 +1648,8 @@ const processExcelUpload = async (filePath, user, body) => {
                 failedRows: data.length,
                 errors: [{ row: rowNum, reason: message, column: 'academicYear' }],
             };
+            markTiming('validationMs', validationStartedAt);
+            err.timings = completeTimings();
             throw err;
         }
     }
@@ -1653,14 +1686,6 @@ const processExcelUpload = async (filePath, user, body) => {
         const admissionNumber = getCellValue('admissionNumber').toString().trim();
         if (!admissionNumber) { addFieldError('admissionNumber', 'missing or empty'); continue; }
         const normalizedAdmissionNumber = admissionNumber.toLowerCase();
-        if (seenAdmissionRows.has(normalizedAdmissionNumber)) {
-            addFieldError(
-                'admissionNumber',
-                `duplicate "${admissionNumber}" also found on row ${seenAdmissionRows.get(normalizedAdmissionNumber)}`
-            );
-            continue;
-        }
-        seenAdmissionRows.set(normalizedAdmissionNumber, rowNum);
 
         const student = studentMap.get(admissionNumber) || studentMap.get(normalizedAdmissionNumber);
         if (!student) { addFieldError('admissionNumber', `student "${admissionNumber}" not found`); continue; }
@@ -1747,6 +1772,24 @@ const processExcelUpload = async (filePath, user, body) => {
         const incidentRegisterDate = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
         if (isNaN(incidentRegisterDate.getTime())) { addFieldError('date/time', 'invalid date/time combination'); continue; }
 
+        const duplicateKey = [
+            normalizedAdmissionNumber,
+            incidentAcademicYear,
+            validCategory.toLowerCase().trim(),
+            incidentRegisterDate.toISOString(),
+            String(description || '').toLowerCase().trim().replace(/\s+/g, ' '),
+            String(validLocation || '').toLowerCase().trim(),
+            isHighPriority ? 'high' : 'normal',
+        ].join('|');
+        if (seenIncidentRows.has(duplicateKey)) {
+            addFieldError(
+                'duplicate',
+                `duplicate incident also found on row ${seenIncidentRows.get(duplicateKey)}`
+            );
+            continue;
+        }
+        seenIncidentRows.set(duplicateKey, rowNum);
+
         incidents.push({
             schoolId: user.schoolId,
             academicYear: incidentAcademicYear,
@@ -1783,8 +1826,12 @@ const processExcelUpload = async (filePath, user, body) => {
         err.statusCode = 400;
         err.errors = errors;
         err.validationResults = validationResults;
+        markTiming('validationMs', validationStartedAt);
+        err.timings = completeTimings();
         throw err;
     }
+    markTiming('validationMs', validationStartedAt);
+    reportProgress('Saving incidents', 55);
 
     const shouldGenerate = body.shouldGenerateLetter === 'true' || body.shouldGenerateLetter === true;
     const letterLanguage = body.letterLanguage || 'en';
@@ -1802,10 +1849,14 @@ const processExcelUpload = async (filePath, user, body) => {
             notifications = [];
             notificationRecipients = [];
 
+            const incidentCreationStartedAt = Date.now();
             createdIncidents = await Incident.insertMany(incidents, { ordered: true, session });
+            markTiming('incidentCreationMs', incidentCreationStartedAt);
+            reportProgress('Generating letters', shouldGenerate ? 70 : 78);
 
             if (shouldGenerate) {
                 for (const incident of createdIncidents) {
+                    const letterStartedAt = Date.now();
                     const result = await autoGenerateLetterFromIncident(
                         incident,
                         user.id,
@@ -1813,6 +1864,7 @@ const processExcelUpload = async (filePath, user, body) => {
                         true,
                         { session, skipStorage: true }
                     );
+                    markTiming('letterGenerationMs', letterStartedAt);
 
                     if (!result.success) {
                         const letterError = new Error(result.message || 'Letter generation failed.');
@@ -1828,7 +1880,9 @@ const processExcelUpload = async (filePath, user, body) => {
                     });
                 }
             }
+            reportProgress('Writing audit log', 82);
 
+            const auditLogStartedAt = Date.now();
             await Log.create([{
                 schoolId: user.schoolId,
                 academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
@@ -1847,7 +1901,10 @@ const processExcelUpload = async (filePath, user, body) => {
                     academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
                 },
             }], { session });
+            markTiming('auditLogCreationMs', auditLogStartedAt);
+            reportProgress('Creating notifications', 88);
 
+            const notificationStartedAt = Date.now();
             const admins = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } })
                 .select('_id')
                 .session(session)
@@ -1882,6 +1939,8 @@ const processExcelUpload = async (filePath, user, body) => {
                     schoolId: document.schoolId,
                 }));
             }
+            markTiming('notificationCreationMs', notificationStartedAt);
+            reportProgress('Committing transaction', 95);
         });
     } catch (err) {
         const transactionError = new Error(err.message || 'Bulk upload failed. No incidents were created.');
@@ -1894,6 +1953,7 @@ const processExcelUpload = async (filePath, user, body) => {
                 { row: 'Transaction', reason: transactionError.message, column: 'System' },
             ],
         };
+        transactionError.timings = completeTimings();
         throw transactionError;
     } finally {
         await session.endSession();
@@ -1904,8 +1964,9 @@ const processExcelUpload = async (filePath, user, body) => {
     } catch (pushError) {
         logger.warn('Bulk upload notification push failed after commit', { error: pushError?.message });
     }
+    reportProgress('Completed', 99);
 
-    return { createdIncidents, lettersGenerated, lettersFailed, errors, validationResults };
+    return { createdIncidents, lettersGenerated, lettersFailed, errors, validationResults, timings: completeTimings() };
 };
 
 const buildDownloadTemplate = async (format = 'xlsx', user) => {
