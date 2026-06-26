@@ -7,15 +7,17 @@ dotenv.config({ quiet: true });
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-const WEAK_JWT_SECRETS = new Set([
+const WEAK_SECRETS = new Set([
     'CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_STRING_BEFORE_DEPLOYING',
     'replace-with-64-character-random-staff-secret',
     'replace-with-64-character-random-student-secret',
+    'replace-with-64-character-random-file-url-secret',
+    'incident-tracker-file-url',
 ]);
 
-const isWeakJwtSecret = (value) => {
+const isWeakSecret = (value) => {
     if (!value || value.length < 32) return true;
-    return WEAK_JWT_SECRETS.has(value);
+    return WEAK_SECRETS.has(value);
 };
 
 const envSchema = z.object({
@@ -25,6 +27,7 @@ const envSchema = z.object({
     JWT_SECRET_STAFF: z.string().min(32).optional(),
     JWT_SECRET_STUDENT: z.string().min(32).optional(),
     JWT_SECRET: z.string().min(32).optional(),
+    FILE_URL_SECRET: z.string().min(32).optional(),
     JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
     ACCESS_COOKIE_MAX_AGE_MS: z.string().optional(),
     REFRESH_COOKIE_MAX_AGE_MS: z.string().optional(),
@@ -53,7 +56,7 @@ const envSchema = z.object({
             path: ['JWT_SECRET_STAFF'],
             message: 'JWT_SECRET_STAFF is required (min 32 characters, cryptographically random)',
         });
-    } else if (isWeakJwtSecret(env.JWT_SECRET_STAFF)) {
+    } else if (isWeakSecret(env.JWT_SECRET_STAFF)) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['JWT_SECRET_STAFF'],
@@ -67,7 +70,7 @@ const envSchema = z.object({
             path: ['JWT_SECRET_STUDENT'],
             message: 'JWT_SECRET_STUDENT is required (min 32 characters, cryptographically random)',
         });
-    } else if (isWeakJwtSecret(env.JWT_SECRET_STUDENT)) {
+    } else if (isWeakSecret(env.JWT_SECRET_STUDENT)) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['JWT_SECRET_STUDENT'],
@@ -75,11 +78,41 @@ const envSchema = z.object({
         });
     }
 
-    if (env.JWT_SECRET && isWeakJwtSecret(env.JWT_SECRET)) {
+    if (env.JWT_SECRET && isWeakSecret(env.JWT_SECRET)) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['JWT_SECRET'],
             message: 'JWT_SECRET placeholder is not allowed; set JWT_SECRET_STAFF and JWT_SECRET_STUDENT',
+        });
+    }
+
+    if (!env.FILE_URL_SECRET) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['FILE_URL_SECRET'],
+            message: 'FILE_URL_SECRET is required (min 32 characters, cryptographically random)',
+        });
+    } else if (isWeakSecret(env.FILE_URL_SECRET)) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['FILE_URL_SECRET'],
+            message: 'FILE_URL_SECRET must not use a placeholder or weak value',
+        });
+    } else {
+        const authSecretEntries = [
+            ['JWT_SECRET_STAFF', env.JWT_SECRET_STAFF],
+            ['JWT_SECRET_STUDENT', env.JWT_SECRET_STUDENT],
+            ['JWT_SECRET', env.JWT_SECRET],
+        ];
+
+        authSecretEntries.forEach(([key, value]) => {
+            if (value && value === env.FILE_URL_SECRET) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['FILE_URL_SECRET'],
+                    message: `FILE_URL_SECRET must be different from ${key}`,
+                });
+            }
         });
     }
 

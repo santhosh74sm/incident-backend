@@ -6,10 +6,24 @@ const env = require('../config/env');
 const TOKEN_PREFIX = 'v1';
 const AAD = Buffer.from('incident-tracker:s3-key:v1');
 
-const getEncryptionKey = () => crypto
+const getEncryptionKey = (secret) => crypto
     .createHash('sha256')
-    .update(env.JWT_SECRET_STAFF || env.JWT_SECRET_STUDENT || env.JWT_SECRET || 'incident-tracker-file-url')
+    .update(secret)
     .digest();
+
+const getActiveEncryptionKey = () => getEncryptionKey(env.FILE_URL_SECRET);
+
+const getLegacyDecryptionKeys = () => {
+    const legacySecrets = [
+        env.JWT_SECRET_STAFF,
+        env.JWT_SECRET_STUDENT,
+        env.JWT_SECRET,
+    ].filter(Boolean);
+
+    return [...new Set(legacySecrets)]
+        .filter((secret) => secret !== env.FILE_URL_SECRET)
+        .map(getEncryptionKey);
+};
 
 const encode = (buffer) => Buffer.from(buffer).toString('base64url');
 const decode = (value) => Buffer.from(String(value || ''), 'base64url');
@@ -17,11 +31,11 @@ const decode = (value) => Buffer.from(String(value || ''), 'base64url');
 const encryptS3Key = (key) => {
     const normalizedKey = String(key || '');
     const iv = crypto
-        .createHmac('sha256', getEncryptionKey())
+        .createHmac('sha256', getActiveEncryptionKey())
         .update(normalizedKey)
         .digest()
         .subarray(0, 12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', getActiveEncryptionKey(), iv);
     cipher.setAAD(AAD);
 
     const encrypted = Buffer.concat([
@@ -38,14 +52,24 @@ const decryptS3KeyToken = (token) => {
         return null;
     }
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), decode(iv));
-    decipher.setAAD(AAD);
-    decipher.setAuthTag(decode(authTag));
+    const candidateKeys = [getActiveEncryptionKey(), ...getLegacyDecryptionKeys()];
 
-    return Buffer.concat([
-        decipher.update(decode(encrypted)),
-        decipher.final(),
-    ]).toString('utf8');
+    for (const key of candidateKeys) {
+        try {
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, decode(iv));
+            decipher.setAAD(AAD);
+            decipher.setAuthTag(decode(authTag));
+
+            return Buffer.concat([
+                decipher.update(decode(encrypted)),
+                decipher.final(),
+            ]).toString('utf8');
+        } catch {
+            // Try the next key so existing production evidence links remain readable after migration.
+        }
+    }
+
+    return null;
 };
 
 const buildProtectedS3Url = (key) => `/api/uploads/s3/${encodeURIComponent(encryptS3Key(key))}`;
