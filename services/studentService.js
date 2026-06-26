@@ -948,59 +948,86 @@ const deleteStudent = async ({ studentId, actor }) => {
     }
 
     const impact = await getStudentDeleteImpact({ student, actor });
-    const evidenceDeleted = await deleteIncidentEvidenceFromS3OrThrow(impact.relatedIncidents, {
-        operation: 'deleteStudent',
-        schoolId: actor.schoolId,
-        studentId,
-        admissionNo: student.admissionNo,
-    });
-    const evidenceReferencesDeleted = impact.incidentIds.length
-        ? await Incident.updateMany(impact.incidentMatch, { $set: { evidence: [] } })
-        : { modifiedCount: 0 };
-    const readStatesDeleted = impact.incidentIds.length
-        ? await IncidentReadState.deleteMany({ schoolId: actor.schoolId, incident: { $in: impact.incidentIds } })
-        : { deletedCount: 0 };
-    const incidentsDeleted = await Incident.deleteMany(impact.incidentMatch);
-    const lettersDeleted = impact.letterMatch.$or.length
-        ? await IssuedLetter.deleteMany(impact.letterMatch)
-        : { deletedCount: 0 };
-    const notificationsDeleted = impact.notificationMatch.$or.length
-        ? await Notification.deleteMany(impact.notificationMatch)
-        : { deletedCount: 0 };
-    const logsDeleted = impact.logMatch.$or.length
-        ? await Log.deleteMany(impact.logMatch)
-        : { deletedCount: 0 };
-    const studentsDeleted = await Student.deleteOne(tenantFilter(actor, { _id: studentId }));
+    const session = await Student.startSession();
+    let evidenceReferencesDeleted = { modifiedCount: 0 };
+    let readStatesDeleted = { deletedCount: 0 };
+    let incidentsDeleted = { deletedCount: 0 };
+    let lettersDeleted = { deletedCount: 0 };
+    let notificationsDeleted = { deletedCount: 0 };
+    let logsDeleted = { deletedCount: 0 };
+    let studentsDeleted = { deletedCount: 0 };
+    const evidenceKeys = getIncidentEvidenceKeys(impact.relatedIncidents);
 
-    createLog(
-        'STUDENT_PERMANENTLY_DELETED',
-        actor,
-        'System',
-        null,
-        {
-            Name: student.name,
-            'Admission Number': student.admissionNo,
-            Role: 'Student',
-            targetLabel: student.name,
-            targetAdmissionNumber: student.admissionNo,
-            admissionNo: student.admissionNo,
-            academicYear: student.academicYear,
-            affectedRecords: impact.counts,
-            deletedRecords: {
+    try {
+        await session.withTransaction(async () => {
+            evidenceReferencesDeleted = impact.incidentIds.length
+                ? await Incident.updateMany(impact.incidentMatch, { $set: { evidence: [] } }, { session })
+                : { modifiedCount: 0 };
+            readStatesDeleted = impact.incidentIds.length
+                ? await IncidentReadState.deleteMany(
+                    { schoolId: actor.schoolId, incident: { $in: impact.incidentIds } },
+                    { session }
+                )
+                : { deletedCount: 0 };
+            incidentsDeleted = await Incident.deleteMany(impact.incidentMatch, { session });
+            lettersDeleted = impact.letterMatch.$or.length
+                ? await IssuedLetter.deleteMany(impact.letterMatch, { session })
+                : { deletedCount: 0 };
+            notificationsDeleted = impact.notificationMatch.$or.length
+                ? await Notification.deleteMany(impact.notificationMatch, { session })
+                : { deletedCount: 0 };
+            logsDeleted = impact.logMatch.$or.length
+                ? await Log.deleteMany(impact.logMatch, { session })
+                : { deletedCount: 0 };
+            studentsDeleted = await Student.deleteOne(tenantFilter(actor, { _id: studentId }), { session });
+
+            const deletedRecords = {
                 students: studentsDeleted.deletedCount || 0,
                 incidents: incidentsDeleted.deletedCount || 0,
-                evidenceFiles: evidenceDeleted.deletedKeys.length,
+                evidenceFiles: evidenceKeys.length,
                 evidenceReferences: evidenceReferencesDeleted.modifiedCount ? impact.counts.evidenceFiles : 0,
                 issuedLetters: lettersDeleted.deletedCount || 0,
                 notifications: notificationsDeleted.deletedCount || 0,
                 logs: logsDeleted.deletedCount || 0,
                 incidentReadStates: readStatesDeleted.deletedCount || 0,
-            },
-        }
-    );
+            };
+
+            await Log.create([{
+                schoolId: actor.schoolId,
+                academicYear: student.academicYear,
+                actionName: 'STUDENT_PERMANENTLY_DELETED',
+                performedBy: String(getActorId(actor)),
+                entityType: 'System',
+                entityId: null,
+                targetLabel: student.name,
+                metadata: {
+                    Name: student.name,
+                    'Admission Number': student.admissionNo,
+                    Role: 'Student',
+                    targetLabel: student.name,
+                    targetAdmissionNumber: student.admissionNo,
+                    admissionNo: student.admissionNo,
+                    academicYear: student.academicYear,
+                    affectedRecords: impact.counts,
+                    deletedRecords,
+                },
+            }], { ordered: true, session });
+        });
+    } finally {
+        await session.endSession();
+    }
+
+    const evidenceDeleted = evidenceKeys.length
+        ? await deleteIncidentEvidenceFromS3OrThrow(impact.relatedIncidents, {
+            operation: 'deleteStudent',
+            schoolId: actor.schoolId,
+            studentId,
+            admissionNo: student.admissionNo,
+        })
+        : { deletedKeys: [] };
 
     return {
-        message: 'Student permanently deleted successfully.',
+        message: 'Student deleted successfully.',
         affectedRecords: impact.counts,
         deletedRecords: {
             students: studentsDeleted.deletedCount || 0,
