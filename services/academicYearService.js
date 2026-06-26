@@ -6,9 +6,9 @@ const IssuedLetter = require('../models/IssuedLetter');
 const BulkDeleteLog = require('../models/BulkDeleteLog');
 const AppError = require('../utils/AppError');
 const { assertSchoolId } = require('../utils/tenant');
-const { createLog } = require('../utils/logger');
 
 const ACADEMIC_YEAR_PATTERN = /^\d{4}-\d{2}$/;
+const activeAcademicYearChanges = new Set();
 
 const normalizeAcademicYear = (value) => String(value || '').trim();
 
@@ -142,7 +142,7 @@ const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademic
             { academicYear: previousAcademicYear },
             { 'history.academicYear': previousAcademicYear },
         ],
-    });
+    }).lean();
 
     if (session) query = query.session(session);
     const students = await query;
@@ -150,6 +150,8 @@ const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademic
     let promoted = 0;
     let passedOut = 0;
     let skipped = 0;
+    const bulkOps = [];
+    const auditLogs = [];
 
     for (const student of students) {
         const hasTargetHistory = (student.history || []).some((entry) => entry?.academicYear === nextAcademicYear);
@@ -164,21 +166,24 @@ const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademic
             continue;
         }
 
-        let updateQuery = Student.updateOne(
-            { _id: student._id, schoolId },
-            { $set: promotionUpdate.update }
-        );
-        if (session) updateQuery = updateQuery.session(session);
-        await updateQuery;
+        bulkOps.push({
+            updateOne: {
+                filter: { _id: student._id, schoolId },
+                update: { $set: promotionUpdate.update },
+            },
+        });
 
         if (promotionUpdate.promotionTarget.isPassedOut) {
             passedOut += 1;
-            createLog(
-                'STUDENT_PASSED_OUT',
-                getActorId(actor),
-                'Student',
-                student._id,
-                {
+            auditLogs.push({
+                schoolId,
+                academicYear: nextAcademicYear,
+                actionName: 'STUDENT_PASSED_OUT',
+                performedBy: String(getActorId(actor)),
+                entityType: 'Student',
+                entityId: String(student._id),
+                targetLabel: student.name,
+                metadata: {
                     Name: student.name,
                     'Admission Number': student.admissionNo,
                     targetLabel: student.name,
@@ -188,12 +193,16 @@ const promoteActiveStudentsForAcademicYear = async ({ schoolId, previousAcademic
                     academicYear: nextAcademicYear,
                     previousStatus: student.status,
                     status: 'Passed Out',
-                }
-            );
+                },
+            });
         } else promoted += 1;
     }
 
-    return { promoted, passedOut, skipped };
+    if (bulkOps.length > 0) {
+        await Student.bulkWrite(bulkOps, { ordered: true, session });
+    }
+
+    return { promoted, passedOut, skipped, auditLogs };
 };
 
 const changeAcademicYear = async ({ actor, academicYear }) => {
@@ -202,58 +211,95 @@ const changeAcademicYear = async ({ actor, academicYear }) => {
     }
 
     const schoolId = assertSchoolId(actor.schoolId);
-    const workspace = await getWorkspace(schoolId);
-    const previousAcademicYear = workspace.currentAcademicYear || inferAcademicYearFromDate(workspace.createdAt);
-    const calculatedNextAcademicYear = getNextAcademicYear(previousAcademicYear);
-    const nextAcademicYear = academicYear ? validateAcademicYear(academicYear) : calculatedNextAcademicYear;
-
-    if (nextAcademicYear !== calculatedNextAcademicYear) {
-        throw new AppError(`Academic Year can only be advanced to ${calculatedNextAcademicYear}.`, 400);
+    if (activeAcademicYearChanges.has(schoolId)) {
+        throw new AppError('Academic Year change is already in progress. Please wait for it to finish.', 409);
     }
+    activeAcademicYearChanges.add(schoolId);
 
-    if (previousAcademicYear === nextAcademicYear) {
+    let session = null;
+
+    try {
+        const workspace = await getWorkspace(schoolId);
+        const previousAcademicYear = workspace.currentAcademicYear || inferAcademicYearFromDate(workspace.createdAt);
+        const calculatedNextAcademicYear = getNextAcademicYear(previousAcademicYear);
+        const nextAcademicYear = academicYear ? validateAcademicYear(academicYear) : calculatedNextAcademicYear;
+
+        if (nextAcademicYear !== calculatedNextAcademicYear) {
+            throw new AppError(`Academic Year can only be advanced to ${calculatedNextAcademicYear}.`, 400);
+        }
+
+        if (previousAcademicYear === nextAcademicYear) {
+            return {
+                schoolId: workspace.schoolId,
+                currentAcademicYear: previousAcademicYear,
+                previousAcademicYear,
+                promotion: { promoted: 0, passedOut: 0, skipped: 0 },
+            };
+        }
+
+        let promotion = { promoted: 0, passedOut: 0, skipped: 0 };
+        session = await SchoolWorkspace.startSession();
+
+        await session.withTransaction(async () => {
+            const workspaceUpdate = await SchoolWorkspace.updateOne(
+                { schoolId, currentAcademicYear: previousAcademicYear },
+                { $set: { currentAcademicYear: nextAcademicYear } },
+                { session }
+            );
+
+            if (workspaceUpdate.matchedCount !== 1) {
+                throw new AppError('Academic Year change could not be completed because the workspace changed. No changes were saved.', 409);
+            }
+
+            const promotionResult = await promoteActiveStudentsForAcademicYear({
+                schoolId,
+                previousAcademicYear,
+                nextAcademicYear,
+                actor,
+                session,
+            });
+            promotion = {
+                promoted: promotionResult.promoted,
+                passedOut: promotionResult.passedOut,
+                skipped: promotionResult.skipped,
+            };
+
+            const summaryLog = {
+                schoolId,
+                academicYear: nextAcademicYear,
+                actionName: 'ACADEMIC_YEAR_CHANGED',
+                performedBy: String(actor?._id || actor?.id || 'System'),
+                entityType: 'System',
+                entityId: null,
+                targetLabel: `Academic Year ${previousAcademicYear} to ${nextAcademicYear}`,
+                metadata: {
+                    schoolId,
+                    targetLabel: `Academic Year ${previousAcademicYear} to ${nextAcademicYear}`,
+                    previousAcademicYear,
+                    academicYear: nextAcademicYear,
+                    promoted: promotion.promoted,
+                    passedOut: promotion.passedOut,
+                    skipped: promotion.skipped,
+                    summary: true,
+                },
+            };
+
+            await Log.create([summaryLog, ...promotionResult.auditLogs], { ordered: true, session });
+        });
+
         return {
             schoolId: workspace.schoolId,
-            currentAcademicYear: previousAcademicYear,
+            currentAcademicYear: nextAcademicYear,
             previousAcademicYear,
-            promotion: { promoted: 0, passedOut: 0, skipped: 0 },
+            promotion,
         };
+    } catch (error) {
+        if (error instanceof AppError) throw error;
+        throw new AppError('Academic Year change failed. No changes were saved.', 500);
+    } finally {
+        activeAcademicYearChanges.delete(schoolId);
+        if (session) await session.endSession();
     }
-
-    let promotion = { promoted: 0, passedOut: 0, skipped: 0 };
-
-    workspace.currentAcademicYear = nextAcademicYear;
-    await workspace.save();
-    promotion = await promoteActiveStudentsForAcademicYear({
-        schoolId,
-        previousAcademicYear,
-        nextAcademicYear,
-        actor,
-    });
-
-    createLog(
-        'ACADEMIC_YEAR_CHANGED',
-        actor?._id || actor?.id || 'System',
-        'System',
-        null,
-        {
-            schoolId,
-            targetLabel: `Academic Year ${previousAcademicYear} to ${nextAcademicYear}`,
-            previousAcademicYear,
-            academicYear: nextAcademicYear,
-            promoted: promotion.promoted,
-            passedOut: promotion.passedOut,
-            skipped: promotion.skipped,
-            summary: true,
-        }
-    );
-
-    return {
-        schoolId: workspace.schoolId,
-        currentAcademicYear: workspace.currentAcademicYear,
-        previousAcademicYear,
-        promotion,
-    };
 };
 
 const getAcademicYearSummary = async (actor) => {
