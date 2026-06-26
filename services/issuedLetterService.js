@@ -252,18 +252,23 @@ const renderDocxTemplate = (fileBuffer, studentData) => {
  * Auto-generate an issued letter from an incident using a matching DOCX template.
  * Returns { success, letter } on success or { success: false, message } on failure.
  */
-const autoGenerateLetterFromIncident = async (incident, userId, language = 'en', skipLog = false) => {
+const autoGenerateLetterFromIncident = async (incident, userId, language = 'en', skipLog = false, options = {}) => {
+    const session = options.session || null;
+    const skipStorage = options.skipStorage || Boolean(session);
+
     try {
         const incidentCategory = (incident.incidentCategory || incident.category)?.trim();
         if (!incidentCategory) {
             return { success: false, message: 'No category was specified for this incident.' };
         }
 
-        const matchingTemplate = await LetterTemplate.findOne({
+        let templateQuery = LetterTemplate.findOne({
             schoolId: incident.schoolId,
             isActive: true,
             incidentCategory: { $regex: new RegExp(`^${escapeRegex(incidentCategory)}$`, 'i') },
         }).lean();
+        if (session) templateQuery = templateQuery.session(session);
+        const matchingTemplate = await templateQuery;
 
         const templateAvailable = language === 'ta'
             ? hasTemplateFile(matchingTemplate?.tamilTemplateFile)
@@ -302,14 +307,14 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
             };
         }
 
-        const letterNumber = await IssuedLetter.generateLetterNumber(incident.schoolId);
+        const letterNumber = await IssuedLetter.generateLetterNumber(incident.schoolId, { session });
         let storedDocument = {
             generatedDocx: outputBuffer,
             generatedDocxKey: '',
             generatedDocxUrl: '',
         };
 
-        if (s3StorageService.isConfigured()) {
+        if (!skipStorage && s3StorageService.isConfigured()) {
             try {
                 const uploaded = await s3StorageService.uploadBuffer({
                     buffer: outputBuffer,
@@ -350,7 +355,7 @@ const autoGenerateLetterFromIncident = async (incident, userId, language = 'en',
         });
 
         try {
-            await issuedLetter.save();
+            await issuedLetter.save({ session });
         } catch (saveError) {
             if (storedDocument.generatedDocxKey) {
                 try {

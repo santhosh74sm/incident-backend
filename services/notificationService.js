@@ -160,10 +160,10 @@ const deleteAllNotifications = async (userId, schoolId) => {
  * Insert notifications and push updates to all affected users via SSE.
  * Called by logger.js / incidentService after creating notifications.
  */
-const insertAndPush = async (notificationDocuments) => {
+const insertAndPush = async (notificationDocuments, options = {}) => {
     if (!notificationDocuments || notificationDocuments.length === 0) return;
 
-    await Notification.insertMany(notificationDocuments, { ordered: false });
+    await Notification.insertMany(notificationDocuments, { ordered: false, ...options });
 
     // Refresh every affected recipient from one grouped query per school.
     const recipientsById = new Map();
@@ -185,5 +185,6 @@ module.exports = {
     deleteNotification,
     deleteAllNotifications,
     insertAndPush,
+    pushToUsers,
     pushToUser,
 };

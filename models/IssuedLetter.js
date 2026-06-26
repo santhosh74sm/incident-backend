@@ -103,18 +103,20 @@ issuedLetterSchema.index({ schoolId: 1, status: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, generatedAt: -1 });
 issuedLetterSchema.index({ schoolId: 1, academicYear: 1, generatedAt: -1 });
 
-const getExistingMaxLetterSequence = async (IssuedLetterModel, schoolId, year) => {
-    const lastLetter = await IssuedLetterModel.findOne({
+const getExistingMaxLetterSequence = async (IssuedLetterModel, schoolId, year, session = null) => {
+    let query = IssuedLetterModel.findOne({
         schoolId,
         letterNumber: new RegExp(`^LET-${year}-`)
     }).sort({ letterNumber: -1 }).select('letterNumber').lean();
+    if (session) query = query.session(session);
+    const lastLetter = await query;
 
     const match = lastLetter?.letterNumber?.match(/LET-\d{4}-(\d+)/);
     return match?.[1] ? parseInt(match[1], 10) : 0;
 };
 
-const ensureLetterCounter = async (IssuedLetterModel, schoolId, year, counterId) => {
-    const existingMax = await getExistingMaxLetterSequence(IssuedLetterModel, schoolId, year);
+const ensureLetterCounter = async (IssuedLetterModel, schoolId, year, counterId, session = null) => {
+    const existingMax = await getExistingMaxLetterSequence(IssuedLetterModel, schoolId, year, session);
 
     try {
         return await IssuedLetterCounter.findOneAndUpdate(
@@ -128,22 +130,25 @@ const ensureLetterCounter = async (IssuedLetterModel, schoolId, year, counterId)
                     seq: existingMax,
                 },
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, new: true, setDefaultsOnInsert: true, session }
         );
     } catch (error) {
         if (error.code === 11000) {
-            return IssuedLetterCounter.findById(counterId);
+            let query = IssuedLetterCounter.findById(counterId);
+            if (session) query = query.session(session);
+            return query;
         }
         throw error;
     }
 };
 
-issuedLetterSchema.statics.generateLetterNumber = async function(schoolId) {
+issuedLetterSchema.statics.generateLetterNumber = async function(schoolId, options = {}) {
     const normalizedSchoolId = String(schoolId || '').toUpperCase().trim();
     const year = new Date().getFullYear();
     const counterId = `${normalizedSchoolId}:issuedLetter:${year}`;
+    const session = options.session || null;
 
-    await ensureLetterCounter(this, normalizedSchoolId, year, counterId);
+    await ensureLetterCounter(this, normalizedSchoolId, year, counterId, session);
 
     const counter = await IssuedLetterCounter.findOneAndUpdate(
         { _id: counterId },
@@ -155,7 +160,7 @@ issuedLetterSchema.statics.generateLetterNumber = async function(schoolId) {
                 year,
             },
         },
-        { new: true }
+        { new: true, session }
     ).lean();
 
     return `LET-${year}-${String(counter.seq).padStart(5, '0')}`;

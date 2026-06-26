@@ -17,6 +17,8 @@ const Category = require('../models/Category');
 const Location = require('../models/Location');
 const EvidenceType = require('../models/EvidenceType');
 const IssuedLetter = require('../models/IssuedLetter');
+const Log = require('../models/Log');
+const Notification = require('../models/Notification');
 
 const { createLog } = require('../utils/logger');
 const { getPagination, buildPaginationMeta } = require('../utils/pagination');
@@ -1525,7 +1527,7 @@ const processExcelUpload = async (filePath, user, body) => {
             }))
         ),
         findByFieldRegexSet(User, 'email', emailSet, user.schoolId).then((rows) =>
-            rows.map((u) => ({ email: u.email, role: u.role, name: u.name }))
+            rows.map((u) => ({ _id: u._id, email: u.email, role: u.role, name: u.name }))
         ),
     ]);
 
@@ -1546,6 +1548,7 @@ const processExcelUpload = async (filePath, user, body) => {
     const incidents = [];
     const errors = [];
     const validationResults = { totalRows: data.length, successRows: 0, failedRows: 0, errors: [] };
+    const seenAdmissionRows = new Map();
     const currentAcademicYear = await getCurrentAcademicYear(user);
     const uploadAcademicYear = body?.academicYear
         ? validateAcademicYear(body.academicYear)
@@ -1621,8 +1624,17 @@ const processExcelUpload = async (filePath, user, body) => {
 
         const admissionNumber = getCellValue('admissionNumber').toString().trim();
         if (!admissionNumber) { addFieldError('admissionNumber', 'missing or empty'); continue; }
+        const normalizedAdmissionNumber = admissionNumber.toLowerCase();
+        if (seenAdmissionRows.has(normalizedAdmissionNumber)) {
+            addFieldError(
+                'admissionNumber',
+                `duplicate "${admissionNumber}" also found on row ${seenAdmissionRows.get(normalizedAdmissionNumber)}`
+            );
+            continue;
+        }
+        seenAdmissionRows.set(normalizedAdmissionNumber, rowNum);
 
-        const student = studentMap.get(admissionNumber) || studentMap.get(admissionNumber.toLowerCase());
+        const student = studentMap.get(admissionNumber) || studentMap.get(normalizedAdmissionNumber);
         if (!student) { addFieldError('admissionNumber', `student "${admissionNumber}" not found`); continue; }
         const rowAcademicYearValue = getCellValue('academicYear', 'academic year');
         let incidentAcademicYear = uploadAcademicYear;
@@ -1738,108 +1750,131 @@ const processExcelUpload = async (filePath, user, body) => {
         validationResults.successRows++;
     }
 
-    if (incidents.length === 0) {
-        const err = new Error('Excel validation failed - No valid incidents to upload');
+    if (errors.length > 0 || incidents.length !== data.length) {
+        const err = new Error('Excel validation failed - no incidents were created. Please correct every reported row and upload again.');
         err.statusCode = 400;
         err.errors = errors;
         err.validationResults = validationResults;
         throw err;
     }
 
-    let createdIncidents = [];
-    try {
-        createdIncidents = await Incident.insertMany(incidents, { ordered: false, lean: true });
-    } catch (err) {
-        if (err.name === 'BulkWriteError' || err.writeErrors) {
-            const insertedCount = typeof err.insertedCount === 'number'
-                ? err.insertedCount
-                : incidents.length - (err.writeErrors?.length || 0);
-            createdIncidents = incidents.slice(0, insertedCount);
-            err.writeErrors.forEach(we => {
-                const errorMsg = `Database error inserting row: ${we.errmsg}`;
-                errors.push(errorMsg);
-                validationResults.errors.push({ row: 'DB', reason: errorMsg, column: 'System' });
-                validationResults.failedRows++;
-                validationResults.successRows--;
-            });
-        } else {
-            throw err;
-        }
-    }
-
     const shouldGenerate = body.shouldGenerateLetter === 'true' || body.shouldGenerateLetter === true;
     const letterLanguage = body.letterLanguage || 'en';
+    const session = await mongoose.startSession();
+    let createdIncidents = [];
     const lettersGenerated = [];
     const lettersFailed = [];
+    let notifications = [];
+    let notificationRecipients = [];
 
-    // Optimize letter generation using Promise.all instead of a serial for-loop
-    if (shouldGenerate && createdIncidents.length > 0) {
-        let processedLettersCount = 0;
-        let nextThreshold = 25;
-        const sseManager = require('../utils/sseManager');
-        
-        const letterPromises = createdIncidents.map(async (incident) => {
-            try {
-                const result = await letterQueue.push(
-                    // skipLog = true to prevent N+1 DB writes and SSE broadcast floods
-                    () => autoGenerateLetterFromIncident(incident, user.id, letterLanguage, true)
-                ).promise;
-                if (result.success) {
-                    lettersGenerated.push({ incidentId: incident._id, letterId: result.letter._id, letterNumber: result.letter.letterNumber, studentName: incident.studentsInvolved?.[0] || 'Unknown' });
-                } else {
-                    lettersFailed.push({ incidentId: incident._id, studentName: incident.studentsInvolved?.[0] || 'Unknown', reason: result.message });
-                }
-            } catch (err) {
-                lettersFailed.push({ incidentId: incident._id, studentName: incident.studentsInvolved?.[0] || 'Unknown', reason: err.message });
-            } finally {
-                processedLettersCount++;
-                const percentage = (processedLettersCount / createdIncidents.length) * 100;
-                
-                // Throttle SSE updates to exactly 25%, 50%, 75%, and 100%
-                if (percentage >= nextThreshold || processedLettersCount === createdIncidents.length) {
-                    if (percentage >= nextThreshold) nextThreshold += 25;
-                    sseManager.sendToUser(user.id, 'upload_progress', { 
-                        message: `Generated ${processedLettersCount} of ${createdIncidents.length} letters...` 
+    try {
+        await session.withTransaction(async () => {
+            createdIncidents = [];
+            lettersGenerated.length = 0;
+            notifications = [];
+            notificationRecipients = [];
+
+            createdIncidents = await Incident.insertMany(incidents, { ordered: true, session });
+
+            if (shouldGenerate) {
+                for (const incident of createdIncidents) {
+                    const result = await autoGenerateLetterFromIncident(
+                        incident,
+                        user.id,
+                        letterLanguage,
+                        true,
+                        { session, skipStorage: true }
+                    );
+
+                    if (!result.success) {
+                        const letterError = new Error(result.message || 'Letter generation failed.');
+                        letterError.statusCode = 400;
+                        throw letterError;
+                    }
+
+                    lettersGenerated.push({
+                        incidentId: incident._id,
+                        letterId: result.letter._id,
+                        letterNumber: result.letter.letterNumber,
+                        studentName: incident.studentsInvolved?.[0] || 'Unknown',
                     });
                 }
             }
-        });
-        await Promise.all(letterPromises);
-    }
 
-    createLog('Bulk Upload Processed', user, 'Bulk Upload', null, {
-        targetLabel: `${createdIncidents.length} incidents uploaded`,
-        count: createdIncidents.length,
-        lettersGenerated: lettersGenerated.length,
-        summary: true,
-        uploadType: 'Incident',
-        routePath: '/upload-incidents',
-        academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
-    });
-
-    // Notify admins via SSE
-    try {
-        const admins = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } }).select('_id').lean();
-        const notifications = admins
-            .filter((a) => a._id.toString() !== user.id.toString())
-            .map((a) => ({
+            await Log.create([{
                 schoolId: user.schoolId,
-                recipient: a._id,
-                type: 'INCIDENT_CREATED',
+                academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
+                actionName: 'Bulk Upload Processed',
+                performedBy: String(user.id || user._id || 'System'),
                 entityType: 'Bulk Upload',
                 entityId: null,
-                actionName: 'Bulk Upload Processed',
-                message: `Admin ${user.name} bulk uploaded ${createdIncidents.length} incidents from Excel file`,
-                performedBy: user.id.toString(),
-                performedByName: user.name,
-                performedByRole: user.role,
-                targetLabel: `${createdIncidents.length} incidents`,
-                routePath: '/upload-incidents',
-                metadata: { count: createdIncidents.length, lettersGenerated: lettersGenerated.length, routePath: '/upload-incidents' },
-            }));
-        if (notifications.length) await notificationService.insertAndPush(notifications);
-    } catch {
-        // Non-fatal
+                targetLabel: `${createdIncidents.length} incidents uploaded`,
+                metadata: {
+                    targetLabel: `${createdIncidents.length} incidents uploaded`,
+                    count: createdIncidents.length,
+                    lettersGenerated: lettersGenerated.length,
+                    summary: true,
+                    uploadType: 'Incident',
+                    routePath: '/upload-incidents',
+                    academicYear: createdIncidents[0]?.academicYear || uploadAcademicYear,
+                },
+            }], { session });
+
+            const admins = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } })
+                .select('_id')
+                .session(session)
+                .lean();
+
+            notifications = admins
+                .filter((a) => a._id.toString() !== String(user.id || user._id))
+                .map((a) => ({
+                    schoolId: user.schoolId,
+                    recipient: a._id,
+                    type: 'INCIDENT_CREATED',
+                    entityType: 'Bulk Upload',
+                    entityId: null,
+                    actionName: 'Bulk Upload Processed',
+                    message: `Admin ${user.name} bulk uploaded ${createdIncidents.length} incidents from Excel file`,
+                    performedBy: String(user.id || user._id),
+                    performedByName: user.name,
+                    performedByRole: user.role,
+                    targetLabel: `${createdIncidents.length} incidents`,
+                    routePath: '/upload-incidents',
+                    metadata: {
+                        count: createdIncidents.length,
+                        lettersGenerated: lettersGenerated.length,
+                        routePath: '/upload-incidents',
+                    },
+                }));
+
+            if (notifications.length > 0) {
+                await Notification.insertMany(notifications, { ordered: true, session });
+                notificationRecipients = notifications.map((document) => ({
+                    userId: document.recipient,
+                    schoolId: document.schoolId,
+                }));
+            }
+        });
+    } catch (err) {
+        const transactionError = new Error(err.message || 'Bulk upload failed. No incidents were created.');
+        transactionError.statusCode = err.statusCode || 500;
+        transactionError.errors = err.errors || [transactionError.message];
+        transactionError.validationResults = err.validationResults || {
+            ...validationResults,
+            errors: [
+                ...validationResults.errors,
+                { row: 'Transaction', reason: transactionError.message, column: 'System' },
+            ],
+        };
+        throw transactionError;
+    } finally {
+        await session.endSession();
+    }
+
+    try {
+        await notificationService.pushToUsers(notificationRecipients);
+    } catch (pushError) {
+        logger.warn('Bulk upload notification push failed after commit', { error: pushError?.message });
     }
 
     return { createdIncidents, lettersGenerated, lettersFailed, errors, validationResults };
