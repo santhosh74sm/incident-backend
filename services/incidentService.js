@@ -56,6 +56,14 @@ const toIdString = (value) => {
 
 const getUserId = (user) => toIdString(user?.id || user?._id);
 
+const isAssignableStaffActive = (staff) => {
+    if (!staff) return false;
+    if (staff.deletedAt) return false;
+    if (staff.isActive === false) return false;
+    const status = String(staff.status || 'active').trim().toLowerCase();
+    return !['inactive', 'disabled', 'deleted', 'suspended', 'archived'].includes(status);
+};
+
 const attachReadState = async (incidents, user) => {
     const items = Array.isArray(incidents) ? incidents : [];
     const userId = getUserId(user);
@@ -1106,19 +1114,39 @@ const assignIncident = async (incidentId, handlerId, user) => {
         };
     }
 
-    const handlerQuery = isSelfAssignment
-        ? { _id: handlerId, role: { $in: ADMIN_ROLES } }
-        : { _id: handlerId, role: { $nin: ADMIN_ROLES } };
-    const handler = await User.findOne(tenantFilter(user, handlerQuery))
-        .select('_id')
+    const handler = await User.findById(handlerId)
+        .select('_id schoolId role status isActive deletedAt')
         .lean();
+
     if (!handler) {
-        const err = new Error('Incidents can only be assigned to non-admin staff users.');
+        const err = new Error('Selected staff member does not exist.');
+        err.statusCode = 404;
+        throw err;
+    }
+
+    if (String(handler.schoolId || '').toUpperCase() !== String(incident.schoolId || '').toUpperCase()) {
+        const err = new Error('Selected staff member cannot be assigned to this incident.');
         err.statusCode = 400;
         throw err;
     }
 
-    incident.assignedHandler = handlerId;
+    if (!isAssignableStaffActive(handler)) {
+        const err = new Error('Selected staff member is inactive.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const roleAllowed = isSelfAssignment
+        ? ADMIN_ROLES.includes(handler.role)
+        : OPERATIONAL_ROLES.includes(handler.role);
+
+    if (!roleAllowed) {
+        const err = new Error('Selected staff member cannot be assigned.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    incident.assignedHandler = handler._id;
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
         note: 'CASE ASSIGNED TO HANDLER.',
