@@ -143,7 +143,7 @@ const validateFileTypes = async (req, res, next) => {
     try {
         const { fileTypeFromBuffer } = await import('file-type');
 
-        for (const file of files) {
+        const validateFile = async (file) => {
             const extension = path.extname(file.originalname).toLowerCase().replace('.', '');
             let buffer;
 
@@ -155,19 +155,19 @@ const validateFileTypes = async (req, res, next) => {
                 await fd.read(buffer, 0, 4100, 0);
                 await fd.close();
             } else {
-                return res.status(400).json({ message: `File type could not be verified: ${file.originalname}` });
+                return { valid: false, message: `File type could not be verified: ${file.originalname}` };
             }
 
             if (textExtensions.has(extension)) {
                 if (buffer.includes(0)) {
                     removeFile(file.path);
-                    return res.status(400).json({ message: `File type not allowed: ${file.originalname}` });
+                    return { valid: false, message: `File type not allowed: ${file.originalname}` };
                 }
-                continue;
+                return { valid: true };
             }
 
             if (legacyOfficeExtensions.has(extension)) {
-                continue;
+                return { valid: true };
             }
 
             const detected = await fileTypeFromBuffer(buffer);
@@ -178,14 +178,19 @@ const validateFileTypes = async (req, res, next) => {
                     const fullBuffer = file.buffer || await fs.promises.readFile(file.path);
                     validateDocxBuffer(fullBuffer);
                 }
-                continue;
+                return { valid: true };
             }
 
             if (!detected || !allowedDetectedTypes.includes(detected.ext)) {
                 removeFile(file.path);
-                return res.status(400).json({ message: `File type not allowed: ${file.originalname}` });
+                return { valid: false, message: `File type not allowed: ${file.originalname}` };
             }
-        }
+            return { valid: true };
+        };
+
+        const results = await Promise.all(files.map(validateFile));
+        const failed = results.find((result) => !result.valid);
+        if (failed) return res.status(400).json({ message: failed.message });
 
         next();
     } catch (error) {

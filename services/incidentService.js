@@ -1959,10 +1959,12 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
         await session.endSession();
     }
 
-    try {
-        await notificationService.pushToUsers(notificationRecipients);
-    } catch (pushError) {
-        logger.warn('Bulk upload notification push failed after commit', { error: pushError?.message });
+    if (notificationRecipients.length > 0) {
+        setImmediate(() => {
+            notificationService.pushToUsers(notificationRecipients).catch((pushError) => {
+                logger.warn('Bulk upload notification push failed after commit', { error: pushError?.message });
+            });
+        });
     }
     reportProgress('Completed', 99);
 
