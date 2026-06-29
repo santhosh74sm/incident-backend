@@ -1,4 +1,5 @@
 const fs = require('fs');
+const mongoose = require('mongoose');
 const XLSX = require('xlsx');
 const Student = require('../models/Student');
 const Incident = require('../models/Incident');
@@ -680,182 +681,197 @@ const uploadStudents = async ({ filePath, actor, uploadAcademicYear = null }) =>
 
         const admissionNumbers = validRows.map((row) => normalizeAdmissionNo(row.admissionNo)).filter(Boolean);
         
-        // Use lean() for fast pre-upload checks
-        const existingStudents = await Student.find(tenantFilter(actor, {
-            admissionNo: { $in: admissionNumbers },
-        })).select('schoolId admissionNo name className section academicYear status history password').lean();
-
-        const existingByAdmission = new Map(existingStudents.map((s) => [s.admissionNo, s]));
-        const seenInExcel = new Set();
-        const finalValidRows = [];
-        const failedRows = [];
-        const currentAcademicYear = await getCurrentAcademicYear(actor);
-        let defaultAcademicYear = currentAcademicYear;
+        const session = await mongoose.startSession();
+        let uploadResult;
 
         try {
-            defaultAcademicYear = validateStudentUploadAcademicYear(uploadAcademicYear, currentAcademicYear);
-        } catch (error) {
-            throw createUploadValidationError([error.message]);
-        }
+            await session.withTransaction(async () => {
+                const existingStudents = await Student.find(tenantFilter(actor, {
+                    admissionNo: { $in: admissionNumbers },
+                }))
+                    .select('schoolId admissionNo name className section academicYear status history password')
+                    .session(session)
+                    .lean();
 
-        for (let i = 0; i < validRows.length; i++) {
-            const row = validRows[i];
-            const rowNum = i + 2;
-            const admNo = normalizeAdmissionNo(row.admissionNo);
-            if (!admNo) {
-                failedRows.push(`Row ${rowNum}: Admission Number is required`);
-                continue;
-            }
-            if (!row.name || !row.class || !row.section) {
-                failedRows.push(`Row ${rowNum}: Name, Class, and Section are required`);
-                continue;
-            }
-            let academicYear;
-            try {
-                academicYear = validateStudentUploadAcademicYear(defaultAcademicYear, currentAcademicYear);
-            } catch (error) {
-                failedRows.push(`Row ${rowNum}: ${error.message}`);
-                continue;
-            }
-            
-            if (seenInExcel.has(`${admNo}:${academicYear}`)) {
-                failedRows.push(`Row ${rowNum}: Duplicate admission number ${admNo} for academic year ${academicYear} in this upload.`);
-            } else if (hasAcademicYearHistory(existingByAdmission.get(admNo), academicYear)) {
-                failedRows.push(`Row ${rowNum}: A duplicate academic year record exists for admission number ${admNo} in ${academicYear}. Update the student through User Management.`);
-            } else {
-                seenInExcel.add(`${admNo}:${academicYear}`);
-                finalValidRows.push({ ...row, admissionNo: admNo, academicYear });
-            }
-        }
+                const existingByAdmission = new Map(existingStudents.map((s) => [s.admissionNo, s]));
+                const seenInExcel = new Set();
+                const finalValidRows = [];
+                const failedRows = [];
+                const currentAcademicYear = await getCurrentAcademicYear(actor);
+                let defaultAcademicYear = currentAcademicYear;
 
-        if (failedRows.length > 0) {
-            throw createUploadValidationError(failedRows);
-        }
-
-        if (finalValidRows.length === 0 && data.length > 0) {
-            throw new AppError('No valid new students to insert. All rows are duplicates or invalid.', 400);
-        }
-
-        for (let i = 0; i < finalValidRows.length; i++) {
-            try {
-                finalValidRows[i].academicYear = validateStudentUploadAcademicYear(finalValidRows[i].academicYear, currentAcademicYear);
-            } catch (error) {
-                throw createUploadValidationError([`Row ${finalValidRows[i].rowNum || i + 2}: ${error.message}`]);
-            }
-        }
-
-        let insertedCount = 0;
-        let updatedCount = 0;
-        const generatedCredentials = [];
-
-        for (let batchStart = 0; batchStart < finalValidRows.length; batchStart += STUDENT_UPLOAD_BATCH_SIZE) {
-            const batch = finalValidRows.slice(batchStart, batchStart + STUDENT_UPLOAD_BATCH_SIZE);
-            const prepared = await Promise.all(batch.map(async (row, batchIndex) => {
-                const className = normalizeClassName(row.class);
-                const section = normalizeSection(row.section);
-                const existing = existingByAdmission.get(row.admissionNo);
-                if (existing) {
-                    const { update } = buildStudentUpdateForAcademicYear({
-                        academicYear: row.academicYear,
-                        currentAcademicYear,
-                        existingStudent: existing,
-                        input: { name: row.name, className, section, status: 'Active' },
-                    });
-                    return { row, batchIndex, type: 'update', existing, update };
+                try {
+                    defaultAcademicYear = validateStudentUploadAcademicYear(uploadAcademicYear, currentAcademicYear);
+                } catch (error) {
+                    throw createUploadValidationError([error.message]);
                 }
 
-                const credentials = await generateStudentInitialPassword();
-                return {
-                    row,
-                    batchIndex,
-                    type: 'insert',
-                    credentials,
-                    document: {
-                        schoolId: actor.schoolId,
-                        admissionNo: row.admissionNo,
-                        name: row.name,
-                        className,
-                        section,
-                        academicYear: row.academicYear,
-                        history: [buildHistoryEntry({ academicYear: row.academicYear, admissionNo: row.admissionNo, name: row.name, className, section })],
-                        password: credentials.hash,
-                        mustChangePassword: true,
-                    },
-                };
-            }));
-            const operations = prepared.map((entry) => entry.type === 'update'
-                ? { updateOne: { filter: tenantFilter(actor, { admissionNo: entry.row.admissionNo }), update: { $set: entry.update }, runValidators: true } }
-                : { insertOne: { document: entry.document } });
-            const failedOperationIndexes = new Set();
-            try {
-                await Student.bulkWrite(operations, { ordered: false });
-            } catch (error) {
-                const writeErrors = error?.writeErrors || error?.result?.getWriteErrors?.() || [];
-                if (!writeErrors.length) throw error;
-                const hasWriteConcernFailure = Boolean(
-                    error?.writeConcernError
-                    || error?.result?.getWriteConcernError?.()
-                    || error?.result?.getWriteConcernErrors?.()?.length
-                );
-                if (hasWriteConcernFailure) throw error;
-                writeErrors.forEach((writeError) => {
-                    const index = Number(writeError.index);
-                    if (!Number.isInteger(index) || !prepared[index]) throw error;
-                    failedOperationIndexes.add(index);
-                    const row = prepared[index].row;
-                    failedRows.push(`Row ${row?.rowNum || batchStart + index + 2}: ${writeError.errmsg || writeError.message || 'Database write failed'}`);
-                });
-            }
-
-            const referenceSyncEntries = [];
-            prepared.forEach((entry, index) => {
-                if (failedOperationIndexes.has(index)) return;
-                if (entry.type === 'insert') {
-                    generatedCredentials.push({ admissionNo: entry.row.admissionNo, tempPassword: entry.credentials.plaintext });
-                    existingByAdmission.set(entry.row.admissionNo, entry.document);
-                    insertedCount += 1;
-                    return;
-                }
-                const updatedExisting = { ...entry.existing, ...entry.update, schoolId: entry.existing.schoolId || actor.schoolId, history: entry.update.history };
-                existingByAdmission.set(entry.row.admissionNo, updatedExisting);
-                referenceSyncEntries.push({ oldStudent: entry.existing, updatedStudent: updatedExisting, row: entry.row });
-                updatedCount += 1;
-            });
-            for (let syncStart = 0; syncStart < referenceSyncEntries.length; syncStart += STUDENT_REFERENCE_SYNC_CONCURRENCY) {
-                const syncBatch = referenceSyncEntries.slice(syncStart, syncStart + STUDENT_REFERENCE_SYNC_CONCURRENCY);
-                const results = await Promise.allSettled(syncBatch.map((entry) => syncStudentReferences(entry.oldStudent, entry.updatedStudent)));
-                results.forEach((result, index) => {
-                    if (result.status === 'rejected') {
-                        const entry = syncBatch[index];
-                        failedRows.push(`Row ${entry.row?.rowNum || batchStart + syncStart + index + 2}: Student saved, but related records could not be synchronized (${result.reason?.message || 'unknown error'}).`);
+                for (let i = 0; i < validRows.length; i++) {
+                    const row = validRows[i];
+                    const rowNum = i + 2;
+                    const admNo = normalizeAdmissionNo(row.admissionNo);
+                    if (!admNo) {
+                        failedRows.push(`Row ${rowNum}: Admission Number is required`);
+                        continue;
                     }
-                });
+                    if (!row.name || !row.class || !row.section) {
+                        failedRows.push(`Row ${rowNum}: Name, Class, and Section are required`);
+                        continue;
+                    }
+                    let academicYear;
+                    try {
+                        academicYear = validateStudentUploadAcademicYear(defaultAcademicYear, currentAcademicYear);
+                    } catch (error) {
+                        failedRows.push(`Row ${rowNum}: ${error.message}`);
+                        continue;
+                    }
+
+                    if (seenInExcel.has(`${admNo}:${academicYear}`)) {
+                        failedRows.push(`Row ${rowNum}: Duplicate admission number ${admNo} for academic year ${academicYear} in this upload.`);
+                    } else if (hasAcademicYearHistory(existingByAdmission.get(admNo), academicYear)) {
+                        failedRows.push(`Row ${rowNum}: A duplicate academic year record exists for admission number ${admNo} in ${academicYear}. Update the student through User Management.`);
+                    } else {
+                        seenInExcel.add(`${admNo}:${academicYear}`);
+                        finalValidRows.push({ ...row, admissionNo: admNo, academicYear });
+                    }
+                }
+
+                if (failedRows.length > 0) {
+                    throw createUploadValidationError(failedRows);
+                }
+
+                if (finalValidRows.length === 0 && data.length > 0) {
+                    throw new AppError('No valid new students to insert. All rows are duplicates or invalid.', 400);
+                }
+
+                for (let i = 0; i < finalValidRows.length; i++) {
+                    try {
+                        finalValidRows[i].academicYear = validateStudentUploadAcademicYear(finalValidRows[i].academicYear, currentAcademicYear);
+                    } catch (error) {
+                        throw createUploadValidationError([`Row ${finalValidRows[i].rowNum || i + 2}: ${error.message}`]);
+                    }
+                }
+
+                let insertedCount = 0;
+                let updatedCount = 0;
+                const generatedCredentials = [];
+
+                for (let batchStart = 0; batchStart < finalValidRows.length; batchStart += STUDENT_UPLOAD_BATCH_SIZE) {
+                    const batch = finalValidRows.slice(batchStart, batchStart + STUDENT_UPLOAD_BATCH_SIZE);
+                    const prepared = await Promise.all(batch.map(async (row, batchIndex) => {
+                        const className = normalizeClassName(row.class);
+                        const section = normalizeSection(row.section);
+                        const existing = existingByAdmission.get(row.admissionNo);
+                        if (existing) {
+                            const { update } = buildStudentUpdateForAcademicYear({
+                                academicYear: row.academicYear,
+                                currentAcademicYear,
+                                existingStudent: existing,
+                                input: { name: row.name, className, section, status: 'Active' },
+                            });
+                            return { row, batchIndex, type: 'update', existing, update };
+                        }
+
+                        const credentials = await generateStudentInitialPassword();
+                        return {
+                            row,
+                            batchIndex,
+                            type: 'insert',
+                            credentials,
+                            document: {
+                                schoolId: actor.schoolId,
+                                admissionNo: row.admissionNo,
+                                name: row.name,
+                                className,
+                                section,
+                                academicYear: row.academicYear,
+                                history: [buildHistoryEntry({ academicYear: row.academicYear, admissionNo: row.admissionNo, name: row.name, className, section })],
+                                password: credentials.hash,
+                                mustChangePassword: true,
+                            },
+                        };
+                    }));
+                    const operations = prepared.map((entry) => entry.type === 'update'
+                        ? { updateOne: { filter: tenantFilter(actor, { admissionNo: entry.row.admissionNo }), update: { $set: entry.update }, runValidators: true } }
+                        : { insertOne: { document: entry.document } });
+
+                    await Student.bulkWrite(operations, { ordered: true, session });
+
+                    const referenceSyncEntries = [];
+                    prepared.forEach((entry) => {
+                        if (entry.type === 'insert') {
+                            generatedCredentials.push({ admissionNo: entry.row.admissionNo, tempPassword: entry.credentials.plaintext });
+                            existingByAdmission.set(entry.row.admissionNo, entry.document);
+                            insertedCount += 1;
+                            return;
+                        }
+                        const updatedExisting = { ...entry.existing, ...entry.update, schoolId: entry.existing.schoolId || actor.schoolId, history: entry.update.history };
+                        existingByAdmission.set(entry.row.admissionNo, updatedExisting);
+                        referenceSyncEntries.push({ oldStudent: entry.existing, updatedStudent: updatedExisting, row: entry.row });
+                        updatedCount += 1;
+                    });
+                    for (let syncStart = 0; syncStart < referenceSyncEntries.length; syncStart += STUDENT_REFERENCE_SYNC_CONCURRENCY) {
+                        const syncBatch = referenceSyncEntries.slice(syncStart, syncStart + STUDENT_REFERENCE_SYNC_CONCURRENCY);
+                        const results = await Promise.allSettled(syncBatch.map((entry) =>
+                            syncStudentReferences(entry.oldStudent, entry.updatedStudent, {
+                                academicYear: entry.row.academicYear,
+                                session,
+                            })
+                        ));
+                        const rejected = results.find((result) => result.status === 'rejected');
+                        if (rejected) {
+                            const index = results.indexOf(rejected);
+                            const entry = syncBatch[index];
+                            throw createUploadValidationError([
+                                `Row ${entry.row?.rowNum || batchStart + syncStart + index + 2}: Related records could not be synchronized (${rejected.reason?.message || 'unknown error'}).`,
+                            ]);
+                        }
+                    }
+                }
+
+                await Log.create([{
+                    schoolId: actor.schoolId,
+                    academicYear: currentAcademicYear,
+                    actionName: 'STUDENT_BULK_UPLOAD',
+                    performedBy: String(getActorId(actor)),
+                    entityType: 'Student',
+                    entityId: null,
+                    targetLabel: `${insertedCount} students imported, ${updatedCount} students updated`,
+                    metadata: {
+                        targetLabel: `${insertedCount} students imported, ${updatedCount} students updated`,
+                        Count: insertedCount + updatedCount,
+                        insertedCount,
+                        updatedCount,
+                        Action: 'Upsert',
+                        summary: true,
+                        uploadType: 'Student',
+                        academicYear: currentAcademicYear,
+                    },
+                }], { ordered: true, session });
+
+                uploadResult = {
+                    message: `Successfully processed upload. Inserted ${insertedCount} and updated ${updatedCount} student(s).`,
+                    generatedCredentials,
+                    failedRows: undefined,
+                    failedCount: 0,
+                };
+            });
+        } catch (error) {
+            if (error instanceof AppError) throw error;
+            if (error?.code === 11000) {
+                throw createUploadValidationError([
+                    'One or more admission numbers already exist or were uploaded concurrently. No students were saved.',
+                ]);
             }
+            if (error?.code === 112 || error?.errorLabels?.includes?.('TransientTransactionError')) {
+                throw new AppError('Student upload conflicted with another write. No students were saved. Please try again.', 409);
+            }
+            throw new AppError('Student upload failed. No students were saved. Please verify the file and try again.', 500);
+        } finally {
+            await session.endSession();
         }
 
-        createLog(
-            'STUDENT_BULK_UPLOAD',
-            actor,
-            'Student',
-            null,
-            {
-                targetLabel: `${insertedCount} students imported, ${updatedCount} students updated`,
-                Count: insertedCount + updatedCount,
-                insertedCount,
-                updatedCount,
-                Action: 'Upsert',
-                summary: true,
-                uploadType: 'Student',
-                academicYear: currentAcademicYear,
-            }
-        );
-
-        return { 
-            message: `Successfully processed upload. Inserted ${insertedCount} and updated ${updatedCount} student(s).`, 
-            generatedCredentials,
-            failedRows: failedRows.length > 0 ? failedRows : undefined,
-            failedCount: failedRows.length
-        };
+        return uploadResult;
     } finally {
         if (filePath) {
             fs.unlink(filePath, () => {});
@@ -1161,6 +1177,8 @@ const getStudentBehavioralSummary = async (studentId, actor) => {
 };
 
 const syncStudentReferences = async (oldStudent, updatedStudent, options = {}) => {
+    const { session = null } = options;
+    const writeOptions = session ? { session } : {};
     const oldAdmissionNo = String(oldStudent?.admissionNo || '').trim();
     const newAdmissionNo = String(updatedStudent?.admissionNo || '').trim();
     const oldName = String(oldStudent?.name || '').trim();
@@ -1255,34 +1273,45 @@ const syncStudentReferences = async (oldStudent, updatedStudent, options = {}) =
         currentYearLogSet['metadata.studentDetails.section'] = newSection;
     }
 
-    const allIncidentIds = (nameChanged || admissionChanged)
-        ? await Incident.find(studentMatch).distinct('_id')
+    let allIncidentQuery = (nameChanged || admissionChanged)
+        ? Incident.find(studentMatch).distinct('_id')
+        : null;
+    if (allIncidentQuery && session) allIncidentQuery = allIncidentQuery.session(session);
+    const allIncidentIds = allIncidentQuery
+        ? await allIncidentQuery
         : [];
-    const scopedIncidentIds = currentAcademicYear
-        ? await Incident.find({ ...studentMatch, academicYear: currentAcademicYear }).distinct('_id')
+    let scopedIncidentQuery = currentAcademicYear
+        ? Incident.find({ ...studentMatch, academicYear: currentAcademicYear }).distinct('_id')
+        : null;
+    if (scopedIncidentQuery && session) scopedIncidentQuery = scopedIncidentQuery.session(session);
+    const scopedIncidentIds = scopedIncidentQuery
+        ? await scopedIncidentQuery
         : [];
 
     const ops = [];
     if (Object.keys(globalIncidentSet).length > 0) {
-        ops.push(Incident.updateMany(studentMatch, { $set: globalIncidentSet }));
+        ops.push(Incident.updateMany(studentMatch, { $set: globalIncidentSet }, writeOptions));
     }
     if (Object.keys(currentYearSet).length > 0 && currentAcademicYear) {
         ops.push(Incident.updateMany(
             { ...studentMatch, academicYear: currentAcademicYear },
-            { $set: currentYearSet }
+            { $set: currentYearSet },
+            writeOptions
         ));
     }
 
     if (Object.keys(globalLetterSet).length > 0 && admissionValues.length > 0) {
         ops.push(IssuedLetter.updateMany(
             { schoolId, admissionNo: { $in: admissionValues } },
-            { $set: globalLetterSet }
+            { $set: globalLetterSet },
+            writeOptions
         ));
     }
     if (Object.keys(currentYearLetterSet).length > 0 && currentAcademicYear && admissionValues.length > 0) {
         ops.push(IssuedLetter.updateMany(
             { schoolId, admissionNo: { $in: admissionValues }, academicYear: currentAcademicYear },
-            { $set: currentYearLetterSet }
+            { $set: currentYearLetterSet },
+            writeOptions
         ));
     }
 
@@ -1299,14 +1328,16 @@ const syncStudentReferences = async (oldStudent, updatedStudent, options = {}) =
         if (notificationConditions.length > 0) {
             ops.push(Notification.updateMany(
                 { schoolId, $or: notificationConditions },
-                { $set: globalNotificationSet }
+                { $set: globalNotificationSet },
+                writeOptions
             ));
         }
     }
     if (Object.keys(currentYearNotificationSet).length > 0 && scopedIncidentIds.length > 0) {
         ops.push(Notification.updateMany(
             { schoolId, incident: { $in: scopedIncidentIds } },
-            { $set: currentYearNotificationSet }
+            { $set: currentYearNotificationSet },
+            writeOptions
         ));
     }
 
@@ -1321,7 +1352,8 @@ const syncStudentReferences = async (oldStudent, updatedStudent, options = {}) =
                     { 'metadata.studentDetails.admissionNo': { $in: admissionValues } },
                 ],
             },
-            { $set: globalLogSet }
+            { $set: globalLogSet },
+            writeOptions
         ));
     }
     if (Object.keys(currentYearLogSet).length > 0 && currentAcademicYear && admissionValues.length > 0) {
@@ -1336,7 +1368,8 @@ const syncStudentReferences = async (oldStudent, updatedStudent, options = {}) =
                     { 'metadata.studentDetails.admissionNo': { $in: admissionValues } },
                 ],
             },
-            { $set: currentYearLogSet }
+            { $set: currentYearLogSet },
+            writeOptions
         ));
     }
 
