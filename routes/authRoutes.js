@@ -18,6 +18,7 @@ const {
     resetUserPassword,
     getAcademicYears,
     updateAcademicYear,
+    reverseAcademicYear,
 } = require('../controllers/authController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const validate = require('../middleware/validate.middleware');
@@ -44,6 +45,7 @@ router.post('/logout', logoutUser);
 router.get('/me', protect, getMe);
 router.get('/academic-years', protect, getAcademicYears);
 router.put('/academic-year', protect, authorize('Super Admin'), validate(academicYearSchema), updateAcademicYear);
+router.post('/academic-year/reverse', protect, authorize('Super Admin'), reverseAcademicYear);
 // Student-specific auth routes
 router.post(
     '/student/change-password',

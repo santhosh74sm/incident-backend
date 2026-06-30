@@ -12,6 +12,7 @@ const {
     validateAcademicYear,
     getAcademicYearSummary,
     changeAcademicYear,
+    reverseAcademicYearUpdate,
 } = require('./academicYearService');
 
 const ROLE_MAP = {
@@ -730,5 +731,6 @@ module.exports = {
     changeStudentPassword,
     getAcademicYearSummary,
     changeAcademicYear,
+    reverseAcademicYearUpdate,
 };
 

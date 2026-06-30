@@ -224,6 +224,16 @@ const updateAcademicYear = async (req, res, next) => {
     }
 };
 
+const reverseAcademicYear = async (req, res, next) => {
+    try {
+        res.json(await authService.reverseAcademicYearUpdate({
+            actor: req.user,
+        }));
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getAdminExists,
     registerUser,
@@ -242,4 +252,5 @@ module.exports = {
     changeStudentPassword,
     getAcademicYears,
     updateAcademicYear,
+    reverseAcademicYear,
 };
