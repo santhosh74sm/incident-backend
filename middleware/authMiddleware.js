@@ -119,6 +119,13 @@ const protect = async (req, res, next) => {
     const token = getTokenFromRequest(req);
 
     if (!token) {
+        if (req.cookies?.refreshToken) {
+            return res.status(401).json({
+                code: 'ACCESS_TOKEN_MISSING',
+                message: 'Session needs renewal.',
+            });
+        }
+
         return res.status(401).json({ message: 'Please sign in to continue.' });
     }
 
