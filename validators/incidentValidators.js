@@ -64,6 +64,8 @@ const createIncidentSchema = z.object({
     letterLanguage: z.enum(['en', 'ta']).optional(),
     manualTiming: optionalBoolean,
     initialStatus: z.enum(['Pending', 'Closed']).optional(),
+    status: z.enum(['Pending', 'Closed']).optional(),
+    actionTaken: optionalString(5000),
     openedAt: optionalString(80),
     inProgressAt: optionalString(80),
     closedAt: optionalString(80),

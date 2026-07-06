@@ -660,7 +660,7 @@ const createIncidents = async ({ body, files, user }) => {
     const sec = Array.isArray(body.section) ? body.section[0] : body.section;
     const isTeacherCreator = OPERATIONAL_ROLES.includes(user.role);
 
-    const ALLOWED_FIELDS = ['category', 'description', 'location', 'severity', 'isHighPriority', 'highPriority', 'assignedHandler'];
+    const ALLOWED_FIELDS = ['category', 'description', 'location', 'severity', 'isHighPriority', 'highPriority', 'assignedHandler', 'actionTaken'];
     const incidentData = Object.fromEntries(
         Object.entries(body).filter(([key]) => ALLOWED_FIELDS.includes(key))
     );
@@ -668,7 +668,8 @@ const createIncidents = async ({ body, files, user }) => {
     if (isTeacherCreator) incidentData.assignedHandler = user.id;
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
-    const initialStatus = body.initialStatus || 'Pending';
+    const finalStatus = body.status || body.initialStatus || 'Pending';
+    const isClosed = finalStatus === 'Closed';
     const manualOpenedAt = body.openedAt ? new Date(body.openedAt) : null;
     const manualInProgressAt = body.inProgressAt ? new Date(body.inProgressAt) : null;
     const manualClosedAt = body.closedAt ? new Date(body.closedAt) : null;
@@ -689,7 +690,7 @@ const createIncidents = async ({ body, files, user }) => {
         reportedBy: user.id,
         submittedAt: manualOpenedAt || Date.now(),
         incidentDate: manualOpenedAt || Date.now(),
-        status: useManualTiming ? initialStatus : 'Pending',
+        status: finalStatus,
         evidence,
         admissionNo: studentSnapshot.admissionNo,
         student: student._id,
@@ -703,12 +704,42 @@ const createIncidents = async ({ body, files, user }) => {
             section: studentSnapshot.section || sec || '',
             academicYear,
         },
+        ...(isClosed && {
+            closedAt: manualClosedAt || Date.now(),
+            closedBy: user.id,
+        }),
         ...(useManualTiming && {
             openedAt: manualOpenedAt || Date.now(),
             ...(manualInProgressAt && { progressAt: manualInProgressAt, inProgressAt: manualInProgressAt }),
-            ...(manualClosedAt && { closedAt: manualClosedAt, closureRequestedAt: manualClosedAt }),
+            ...(!isClosed && manualClosedAt && { closedAt: manualClosedAt, closureRequestedAt: manualClosedAt }),
         }),
     });
+
+    if (body.actionTaken) {
+        trimProgressLogsBeforePush(incident);
+        if (isClosed) {
+            incident.progressLogs.push({
+                note: `CASE CLOSED: ${String(body.actionTaken).trim()}`,
+                updatedBy: user.name,
+                timestamp: incident.closedAt || Date.now(),
+            });
+        } else {
+            incident.progressLogs.push({
+                note: `Field Operations note added: ${String(body.actionTaken).trim()}`,
+                updatedBy: user.name,
+                timestamp: Date.now(),
+            });
+        }
+        await incident.save();
+    } else if (isClosed) {
+        trimProgressLogsBeforePush(incident);
+        incident.progressLogs.push({
+            note: 'CASE CLOSED: Case resolved and finalized upon creation.',
+            updatedBy: user.name,
+            timestamp: incident.closedAt || Date.now(),
+        });
+        await incident.save();
+    }
     createdIncidents.push(incident);
 
     createLog(
