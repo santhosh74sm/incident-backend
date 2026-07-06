@@ -11,14 +11,14 @@ const evidenceTypeSchema = z.object({
 
 const fieldOperationOptionSchema = z.object({
     label: z.string().trim().min(1).max(200),
-    type: z.enum(['handler', 'assigner']),
+    type: z.enum(['handler', 'assigner', 'updated']),
 });
 
 const reorderOptionsSchema = z.object({
     options: z.array(z.object({
         _id: z.string().optional(),
         id: z.string().optional(),
-        type: z.enum(['handler', 'assigner']).optional(),
+        type: z.enum(['handler', 'assigner', 'updated']).optional(),
     }).passthrough()).min(1),
 });
 

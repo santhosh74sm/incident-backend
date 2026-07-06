@@ -8,6 +8,15 @@ const { createLog } = require('../utils/logger');
 const AppError = require('../utils/AppError');
 const { tenantFilter, tenantDoc } = require('../utils/tenant');
 
+// Migrate legacy handler/assigner options to 'updated'
+FieldOperationOption.updateMany(
+    { type: { $in: ['handler', 'assigner', 'updated-notes'] } },
+    { $set: { type: 'updated' } }
+).exec().catch(err => {
+    console.error('FieldOperationOption migration error:', err);
+});
+
+
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const getActorId = (actor) => actor?.id || actor?._id || 'System';
 const UNKNOWN_FILTER_LABEL = 'Unknown';
@@ -273,25 +282,22 @@ const deleteEvidenceType = async ({ id, actor }) => {
 };
 
 const getFieldOperationOptions = async (type, actor) => {
-    if (!type || !['handler', 'assigner'].includes(type)) {
-        throw new AppError('Valid type (handler/assigner) is required', 400);
-    }
-
-    return FieldOperationOption.find(tenantFilter(actor, { type })).sort({ order: 1 }).lean();
+    return FieldOperationOption.find(tenantFilter(actor, {})).sort({ order: 1 }).lean();
 };
 
 const addFieldOperationOption = async ({ input, actor }) => {
-    if (!input.type || !['handler', 'assigner'].includes(input.type)) {
+    const type = input.type || 'updated';
+    if (!['handler', 'assigner', 'updated'].includes(type)) {
         throw new AppError('Valid type is required', 400);
     }
 
     const label = String(input.label || '').trim();
     if (!label) throw new AppError('Label is required', 400);
 
-    const maxOrder = await FieldOperationOption.findOne(tenantFilter(actor, { type: input.type })).sort({ order: -1 }).select('order').lean();
+    const maxOrder = await FieldOperationOption.findOne(tenantFilter(actor, {})).sort({ order: -1 }).select('order').lean();
     const option = await FieldOperationOption.create(tenantDoc(actor, {
         label,
-        type: input.type,
+        type,
         order: maxOrder ? maxOrder.order + 1 : 1,
         isDefault: false,
     }));
@@ -321,8 +327,7 @@ const reorderFieldOperationOptions = async (options, actor) => {
 
     await FieldOperationOption.bulkWrite(bulkOps);
 
-    const type = options[0]?.type;
-    return FieldOperationOption.find(tenantFilter(actor, { type })).sort({ order: 1 }).lean();
+    return FieldOperationOption.find(tenantFilter(actor, {})).sort({ order: 1 }).lean();
 };
 
 module.exports = {

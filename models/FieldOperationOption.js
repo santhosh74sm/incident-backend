@@ -17,7 +17,7 @@ const fieldOperationOptionSchema = new mongoose.Schema({
     type: { 
         type: String, 
         required: true,
-        enum: ['assigner', 'handler'],
+        enum: ['assigner', 'handler', 'updated'],
         index: true
     },
     isDefault: {
