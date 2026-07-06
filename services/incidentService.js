@@ -306,10 +306,11 @@ const buildEvidenceTypeFilter = (values = []) => {
 };
 
 const STATUS_LOOKUP = {
-    open: 'Open',
-    'in progress': 'In Progress',
-    'in-progress': 'In Progress',
-    inprogress: 'In Progress',
+    open: 'Pending',
+    'in progress': 'Pending',
+    'in-progress': 'Pending',
+    inprogress: 'Pending',
+    pending: 'Pending',
     closed: 'Closed',
 };
 
@@ -667,7 +668,7 @@ const createIncidents = async ({ body, files, user }) => {
     if (isTeacherCreator) incidentData.assignedHandler = user.id;
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
-    const initialStatus = body.initialStatus || 'Open';
+    const initialStatus = body.initialStatus || 'Pending';
     const manualOpenedAt = body.openedAt ? new Date(body.openedAt) : null;
     const manualInProgressAt = body.inProgressAt ? new Date(body.inProgressAt) : null;
     const manualClosedAt = body.closedAt ? new Date(body.closedAt) : null;
@@ -688,7 +689,7 @@ const createIncidents = async ({ body, files, user }) => {
         reportedBy: user.id,
         submittedAt: manualOpenedAt || Date.now(),
         incidentDate: manualOpenedAt || Date.now(),
-        status: useManualTiming ? initialStatus : 'Open',
+        status: useManualTiming ? initialStatus : 'Pending',
         evidence,
         admissionNo: studentSnapshot.admissionNo,
         student: student._id,
@@ -792,8 +793,7 @@ const getIncidentSummary = async ({ user, query = {} }) => {
             $group: {
                 _id: null,
                 total: { $sum: 1 },
-                open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } },
-                inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
+                pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } },
                 closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } },
                 highPriority: { $sum: { $cond: [{ $eq: ['$isHighPriority', true] }, 1, 0] } },
                 unassigned: {
@@ -811,9 +811,9 @@ const getIncidentSummary = async ({ user, query = {} }) => {
         IncidentReadState.distinct('incident', { schoolId: user.schoolId, user: getUserId(user) }),
     ]);
 
-    const summary = grouped || { total: 0, open: 0, inProgress: 0, closed: 0, highPriority: 0, unassigned: 0 };
+    const summary = grouped || { total: 0, pending: 0, closed: 0, highPriority: 0, unassigned: 0 };
     const unread = await Incident.countDocuments({ $and: [builtQuery, { _id: { $nin: readIncidentIds } }] });
-    return { ...summary, active: summary.open + summary.inProgress, unread };
+    return { ...summary, pending: summary.pending, open: summary.pending, inProgress: 0, active: summary.pending, unread };
 };
 
 const getDistinctClasses = async (user) => {
@@ -922,8 +922,7 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
                 summary: [{ $group: {
                     _id: null,
                     total: { $sum: 1 },
-                    open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } },
-                    inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
+                    pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } },
                     closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } },
                     lettersIssued: { $sum: { $cond: ['$_hasLetter', 1, 0] } },
                     unassigned: { $sum: { $cond: ['$_isUnassigned', 1, 0] } },
@@ -933,11 +932,11 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
                 categoryData: [{ $group: { _id: '$_category', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
                 locationData: [{ $group: { _id: '$_location', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
                 evidenceData: [{ $unwind: '$_evidenceValues' }, { $group: { _id: '$_evidenceValues', count: { $sum: 1 }, firstOrder: { $min: '$_id' } } }, { $sort: { count: -1, firstOrder: 1 } }],
-                classWiseData: [{ $group: { _id: '$_className', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
-                staffWorkload: [{ $group: { _id: '$_handlerName', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $sort: { total: -1 } }, { $limit: 8 }],
-                categoryHeatmap: [{ $group: { _id: '$_category', open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $set: { total: { $add: ['$open', '$inProgress', '$closed'] } } }, { $sort: { total: -1 } }],
-                academicYearData: [{ $group: { _id: '$_academicYear', total: { $sum: 1 }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
-                trendBuckets: [{ $match: { _incidentTimestamp: { $ne: null } } }, { $group: { _id: { $dateToString: { date: '$_incidentTimestamp', format: '%Y-%m-%d', timezone } }, open: { $sum: { $cond: [{ $eq: ['$status', 'Open'] }, 1, 0] } }, inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } }, created: { $sum: 1 } } }, { $sort: { _id: 1 } }],
+                classWiseData: [{ $group: { _id: '$_className', total: { $sum: 1 }, pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
+                staffWorkload: [{ $group: { _id: '$_handlerName', total: { $sum: 1 }, pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $sort: { total: -1 } }, { $limit: 8 }],
+                categoryHeatmap: [{ $group: { _id: '$_category', pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }, { $set: { total: { $add: ['$pending', '$closed'] } } }, { $sort: { total: -1 } }],
+                academicYearData: [{ $group: { _id: '$_academicYear', total: { $sum: 1 }, pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } } } }],
+                trendBuckets: [{ $match: { _incidentTimestamp: { $ne: null } } }, { $group: { _id: { $dateToString: { date: '$_incidentTimestamp', format: '%Y-%m-%d', timezone } }, pending: { $sum: { $cond: [{ $eq: ['$status', 'Pending'] }, 1, 0] } }, closed: { $sum: { $cond: [{ $eq: ['$status', 'Closed'] }, 1, 0] } }, created: { $sum: 1 } } }, { $sort: { _id: 1 } }],
             },
         },
     ]).allowDiskUse(true);
@@ -947,8 +946,7 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
     if (total === 0 && await Incident.exists(builtQuery)) {
         throw new AppError('Analytics aggregation returned no data for a non-empty incident scope.', 500);
     }
-    const open = summary.open || 0;
-    const inProgress = summary.inProgress || 0;
+    const pending = summary.pending || 0;
     const closed = summary.closed || 0;
     const sortAcademicYears = (a, b) => {
         const first = Number(String(a.academicYear).slice(0, 4));
@@ -959,16 +957,16 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
 
     return {
         total,
-        open,
-        inProgress,
+        pending,
+        open: pending,
+        inProgress: 0,
         closed,
         lettersIssued: summary.lettersIssued || 0,
-        active: open + inProgress,
+        active: pending,
         unassigned: summary.unassigned || 0,
         resolutionRate: total > 0 ? `${Math.round((closed / total) * 100)}%` : '0%',
         statusData: [
-            { name: 'Open', value: open },
-            { name: 'In progress', value: inProgress },
+            { name: 'Pending', value: pending },
             { name: 'Closed', value: closed },
         ],
         categoryData: (result.categoryData || []).map(({ _id, count }) => ({ name: _id, count })),
@@ -977,7 +975,7 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
         classWiseData: (result.classWiseData || []).map(({ _id, ...entry }) => ({ className: _id, ...entry })).sort((a, b) => Number(a.className) - Number(b.className) || String(a.className).localeCompare(String(b.className))),
         staffWorkload: (result.staffWorkload || []).map(({ _id, ...entry }) => ({ name: _id, ...entry })),
         categoryHeatmap: (result.categoryHeatmap || []).map(({ _id, total: ignored, ...entry }) => ({ label: _id, ...entry })),
-        academicYearData: (result.academicYearData || []).map(({ _id, ...entry }) => ({ name: _id, academicYear: _id, ...entry, unresolved: entry.open + entry.inProgress })).sort(sortAcademicYears),
+        academicYearData: (result.academicYearData || []).map(({ _id, ...entry }) => ({ name: _id, academicYear: _id, ...entry, unresolved: entry.pending })).sort(sortAcademicYears),
         trendBuckets: (result.trendBuckets || []).map(({ _id, ...entry }) => ({ date: _id, ...entry })),
         hasUnknownLocation: Boolean(summary.hasUnknownLocation),
         hasUnknownEvidence: Boolean(summary.hasUnknownEvidence),
@@ -1190,21 +1188,13 @@ const addProgressNote = async (incidentId, note, user) => {
     }
     assertIncidentMutationAccess(incident, user, 'update');
 
-    const movedToInProgress = incident.status === 'Open';
-    if (movedToInProgress) {
-        const t = Date.now();
-        incident.status = 'In Progress';
-        incident.progressAt = t;
-        incident.inProgressAt = incident.inProgressAt || t;
-    }
-
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: note || 'Operational field update recorded.', updatedBy: user.name, timestamp: Date.now() });
     if (incident.rejectionReason) incident.rejectionReason = null;
 
     await incident.save();
 
-    const progressActionName = movedToInProgress ? 'Incident Moved to In Progress' : 'Progress Log Added';
+    const progressActionName = 'Progress Log Added';
     const handlerId = incident.assignedHandler?._id || incident.assignedHandler;
 
     const progressNotificationConfig = isAdministrationRole(user.role)
@@ -1213,7 +1203,7 @@ const addProgressNote = async (incidentId, note, user) => {
                 handlerId ? {
                     recipient: handlerId,
                     actionName: progressActionName,
-                    type: movedToInProgress ? 'INCIDENT_STATUS_UPDATED' : 'INCIDENT_PROGRESS',
+                    type: 'INCIDENT_PROGRESS',
                     message: `${user.name} added a progress update to "${incident.title}".`,
                 } : null,
             ].filter(Boolean),
@@ -1225,8 +1215,8 @@ const addProgressNote = async (incidentId, note, user) => {
         user,
         'Incident',
         incident._id,
-        buildIncidentMetadata(incident, { note, status: incident.status, previousStatus: movedToInProgress ? 'Open' : incident.status }),
-        { type: movedToInProgress ? 'INCIDENT_STATUS_UPDATED' : 'INCIDENT_PROGRESS', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), ...progressNotificationConfig }
+        buildIncidentMetadata(incident, { note, status: incident.status, previousStatus: incident.status }),
+        { type: 'INCIDENT_PROGRESS', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident), ...progressNotificationConfig }
     );
 
     return incident;
@@ -1321,9 +1311,7 @@ const rejectClosure = async (incidentId, reason, user) => {
     const rejectionReason = reason || 'Closure rejected by admin. Further investigation required.';
     incident.closureRequested = false;
     incident.rejectionReason = rejectionReason;
-    incident.status = 'In Progress';
-    incident.inProgressAt = incident.inProgressAt || incident.progressAt || Date.now();
-    incident.progressAt = incident.progressAt || incident.inProgressAt;
+    incident.status = 'Pending';
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({ note: `CLOSURE REJECTED: ${rejectionReason}`, updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
 
@@ -1801,7 +1789,7 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
             submittedAt: incidentRegisterDate,
             createdAt: incidentRegisterDate,
             incidentDate: incidentRegisterDate,
-            status: 'Open',
+            status: 'Pending',
             isHighPriority,
             assignedHandler,
             evidence: validEvidenceTypes.map((type) => ({ evidenceType: type, fileUrl: null })),

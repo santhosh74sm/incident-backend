@@ -113,7 +113,7 @@ const globalSearch = async (queryValue = '', actor) => {
     const incidentResults = (incidents || []).map((incident) => ({
         type: 'incident',
         title: incident?.title || incident?.category || 'Incident',
-        sub: incident?.category ? `${incident.category} • ${incident?.status || 'Open'}` : (incident?.status || 'Incident'),
+        sub: incident?.category ? `${incident.category} • ${incident?.status || 'Pending'}` : (incident?.status || 'Incident'),
         link: `/incidents/${incident?._id || ''}`,
     }));
 

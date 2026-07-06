@@ -63,7 +63,7 @@ const createIncidentSchema = z.object({
     shouldGenerateLetter: optionalBoolean,
     letterLanguage: z.enum(['en', 'ta']).optional(),
     manualTiming: optionalBoolean,
-    initialStatus: z.enum(['Open', 'In Progress', 'Closed']).optional(),
+    initialStatus: z.enum(['Pending', 'Closed']).optional(),
     openedAt: optionalString(80),
     inProgressAt: optionalString(80),
     closedAt: optionalString(80),

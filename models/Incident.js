@@ -32,8 +32,8 @@ const incidentSchema = new mongoose.Schema(
         isHighPriority: { type: Boolean, default: false },
         status: {
             type: String,
-            enum: ['Open', 'In Progress', 'Closed'],
-            default: 'Open',
+            enum: ['Pending', 'Closed'],
+            default: 'Pending',
         },
         closureRequested: { type: Boolean, default: false },
         rejectionReason: { type: String, default: null },

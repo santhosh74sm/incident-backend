@@ -151,6 +151,18 @@ let server;
 const startServer = async () => {
     try {
         await connectDB();
+
+        // Database migration: map Open and In Progress statuses to Pending
+        const Incident = require('./models/Incident');
+        const migrationResult = await Incident.updateMany(
+            { status: { $in: ['Open', 'In Progress'] } },
+            { $set: { status: 'Pending' } }
+        );
+        logger.info('Database migration completed successfully', {
+            matchedCount: migrationResult.matchedCount,
+            modifiedCount: migrationResult.modifiedCount,
+        });
+
         server = app.listen(PORT, () => {
             logger.info(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'} mode)`);
             logger.info('Registered security bootstrap routes', {
