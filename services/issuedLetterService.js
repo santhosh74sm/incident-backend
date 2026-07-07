@@ -525,7 +525,7 @@ const listIssuedLetters = async (query, user) => {
 
     let letterQuery = IssuedLetter.find(builtQuery)
         .select(LETTER_RESPONSE_EXCLUDE)
-        .populate('issuedBy', 'name')
+        .populate('issuedBy', 'name role')
         .populate(
             'incident',
             'title description category status location incidentDate openedAt createdAt submittedAt'
@@ -584,7 +584,7 @@ const getLettersByIncident = async (incidentId, user) => {
     await assertIncidentLetterAccess(incidentId, user);
     return IssuedLetter.find(tenantFilter(user, { incident: incidentId }))
         .select(LETTER_RESPONSE_EXCLUDE)
-        .populate('issuedBy', 'name')
+        .populate('issuedBy', 'name role')
         .populate(
             'incident',
             'title description category status location incidentDate openedAt createdAt submittedAt'
@@ -613,7 +613,7 @@ const getLettersByStudent = async (admissionNo, query, user) => {
     }
     return IssuedLetter.find(tenantFilter(user, letterQuery))
         .select(LETTER_RESPONSE_EXCLUDE)
-        .populate('issuedBy', 'name')
+        .populate('issuedBy', 'name role')
         .populate(
             'incident',
             'title description category status location incidentDate openedAt createdAt submittedAt'

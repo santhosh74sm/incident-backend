@@ -383,7 +383,7 @@ const getAllUsers = async ({ actor } = {}) => {
 };
 
 const getInvestigatorUsers = async ({ actor } = {}) => {
-    const users = await User.find(tenantFilter(actor, { role: { $nin: ADMIN_ROLE_VALUES } }))
+    const users = await User.find(tenantFilter(actor, { role: { $in: ACCOUNT_USER_ROLES } }))
         .select('name email role schoolId')
         .sort({ name: 1 })
         .lean();

@@ -54,6 +54,11 @@ const toIdString = (value) => {
     return String(value);
 };
 
+const formatUserLogLabel = (user) => {
+    if (!user) return 'System';
+    return user.name || 'System';
+};
+
 const getUserId = (user) => toIdString(user?.id || user?._id);
 
 const isAssignableStaffActive = (staff) => {
@@ -439,31 +444,27 @@ const buildIncidentQuery = async (user, query) => {
 
     if (staff.length > 0 || includeUnassigned || includeAdminRole) {
         try {
-            const isAdminSelectedByKeyword = staff.some((e) => ADMIN_KEYWORDS.includes(e.toLowerCase()));
+            const staffConditions = [];
+            if (includeUnassigned) {
+                staffConditions.push({ assignedHandler: null });
+            }
             const validStaffIds = staff
-                .filter((e) => !ADMIN_KEYWORDS.includes(e.toLowerCase()))
                 .filter((e) => mongoose.Types.ObjectId.isValid(e))
                 .map((e) => new mongoose.Types.ObjectId(e));
 
-            const selectedAdminUsers = validStaffIds.length > 0
-                ? await User.find({ schoolId: user.schoolId, _id: { $in: validStaffIds }, role: { $in: ADMIN_ROLES } }).select('_id').lean()
-                : [];
-            const isAdminSelectedById = selectedAdminUsers.length > 0;
-            const needsAdminUserIds = includeUnassigned || includeAdminRole || isAdminSelectedByKeyword || isAdminSelectedById;
-
-            let allAdminIds = [];
-            if (needsAdminUserIds) {
+            if (validStaffIds.length > 0) {
+                staffConditions.push({ assignedHandler: { $in: validStaffIds } });
+            }
+            if (includeAdminRole) {
                 const adminUsers = await User.find({ schoolId: user.schoolId, role: { $in: ADMIN_ROLES } }).select('_id').lean();
-                allAdminIds = adminUsers.map((u) => u._id);
+                const allAdminIds = adminUsers.map((u) => u._id);
+                if (allAdminIds.length > 0) {
+                    staffConditions.push({ assignedHandler: { $in: allAdminIds } });
+                }
             }
-
-            const staffConditions = [];
-            if (includeUnassigned || isAdminSelectedByKeyword || isAdminSelectedById || includeAdminRole) {
-                staffConditions.push({ assignedHandler: null });
-                if (allAdminIds.length > 0) staffConditions.push({ assignedHandler: { $in: allAdminIds } });
+            if (staffConditions.length > 0) {
+                baseConditions.push({ $or: staffConditions });
             }
-            if (validStaffIds.length > 0) staffConditions.push({ assignedHandler: { $in: validStaffIds } });
-            if (staffConditions.length > 0) baseConditions.push({ $or: staffConditions });
         } catch {
             // Staff filter query error — skip filter silently
         }
@@ -582,7 +583,7 @@ const dispatchIncidentCreatedNotifications = async (incidents, user) => {
                 entityType: 'Incident',
                 entityId: incident._id.toString(),
                 actionName: 'Incident Assigned',
-                message: `Admin ${user.name} assigned you: '${incident.category || incident.title}' for ${(incident.studentsInvolved || [])[0] || 'student'} (AdNo: ${incident.admissionNo || 'N/A'}) | Class ${incident.class || 'N/A'} – Sec ${incident.section || 'N/A'}`,
+                message: `${user.name} assigned you: '${incident.category || incident.title}' for ${(incident.studentsInvolved || [])[0] || 'student'} (AdNo: ${incident.admissionNo || 'N/A'}) | Class ${incident.class || 'N/A'} – Sec ${incident.section || 'N/A'}`,
                 performedBy: reporterId.toString(),
                 performedByName: user.name,
                 performedByRole: user.role,
@@ -664,8 +665,15 @@ const createIncidents = async ({ body, files, user }) => {
     const incidentData = Object.fromEntries(
         Object.entries(body).filter(([key]) => ALLOWED_FIELDS.includes(key))
     );
-    if (!incidentData.assignedHandler) delete incidentData.assignedHandler;
-    if (isTeacherCreator) incidentData.assignedHandler = user.id;
+    if (isTeacherCreator) {
+        incidentData.assignedHandler = user.id;
+    }
+    if (!incidentData.assignedHandler) {
+        const defaultAdmin = await User.findOne({ schoolId: user.schoolId, role: { $in: ['Admin', 'Super Admin'] } }).select('_id').lean();
+        if (defaultAdmin) {
+            incidentData.assignedHandler = defaultAdmin._id;
+        }
+    }
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
     const finalStatus = body.status || body.initialStatus || 'Pending';
@@ -720,13 +728,13 @@ const createIncidents = async ({ body, files, user }) => {
         if (isClosed) {
             incident.progressLogs.push({
                 note: `CASE CLOSED: ${String(body.actionTaken).trim()}`,
-                updatedBy: user.name,
+                updatedBy: formatUserLogLabel(user),
                 timestamp: incident.closedAt || Date.now(),
             });
         } else {
             incident.progressLogs.push({
                 note: `Field Operations note added: ${String(body.actionTaken).trim()}`,
-                updatedBy: user.name,
+                updatedBy: formatUserLogLabel(user),
                 timestamp: Date.now(),
             });
         }
@@ -735,7 +743,7 @@ const createIncidents = async ({ body, files, user }) => {
         trimProgressLogsBeforePush(incident);
         incident.progressLogs.push({
             note: 'CASE CLOSED: Case resolved and finalized upon creation.',
-            updatedBy: user.name,
+            updatedBy: formatUserLogLabel(user),
             timestamp: incident.closedAt || Date.now(),
         });
         await incident.save();
@@ -786,6 +794,7 @@ const listIncidents = async ({ user, query, maxLimit = 100 }) => {
     let incidentQuery = Incident.find(builtQuery)
         .populate('reportedBy', 'name role')
         .populate('assignedHandler', 'name role')
+        .populate('closedBy', 'name role')
         .populate('student', 'name admissionNo className section academicYear status history')
         .sort({ incidentDate: -1, createdAt: -1 });
 
@@ -830,7 +839,7 @@ const getIncidentSummary = async ({ user, query = {} }) => {
                 unassigned: {
                     $sum: {
                         $cond: [
-                            { $or: [{ $eq: [{ $ifNull: ['$assignedHandler', null] }, null] }, { $in: ['$assignedHandler', adminIds] }] },
+                            { $eq: [{ $ifNull: ['$assignedHandler', null] }, null] },
                             1,
                             0,
                         ],
@@ -940,12 +949,14 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
             $set: {
                 _handlerName: {
                     $cond: [
-                        { $or: [{ $eq: [{ $ifNull: ['$_handler', null] }, null] }, { $in: ['$_handler.role', adminRoles] }] },
-                        'Admin',
-                        { $ifNull: ['$_handler.name', 'Admin'] },
-                    ],
+                        { $eq: [{ $ifNull: ['$assignedHandler', null] }, null] },
+                        'Unassigned',
+                        { $ifNull: ['$_handler.name', 'Unknown User'] }
+                    ]
                 },
-                _isUnassigned: { $or: [{ $eq: [{ $ifNull: ['$_handler', null] }, null] }, { $in: ['$_handler.role', adminRoles] }] },
+                _isUnassigned: {
+                    $eq: [{ $ifNull: ['$assignedHandler', null] }, null]
+                },
             },
         },
         {
@@ -1179,7 +1190,7 @@ const assignIncident = async (incidentId, handlerId, user) => {
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
         note: 'CASE ASSIGNED TO HANDLER.',
-        updatedBy: `${user.name} (Admin)`,
+        updatedBy: formatUserLogLabel(user),
         timestamp: Date.now(),
     });
 
@@ -1201,7 +1212,7 @@ const assignIncident = async (incidentId, handlerId, user) => {
             routePath: `/incidents/${incident._id}`,
             studentDetails: buildIncidentStudentDetails(incident),
             recipientEntries: [
-                handlerId ? { recipient: handlerId, actionName: 'Incident Assigned', message: `Admin ${user.name} assigned you a new incident: "${incident.title}".` } : null,
+                handlerId ? { recipient: handlerId, actionName: 'Incident Assigned', message: `${user.name} assigned you a new incident: "${incident.title}".` } : null,
                 reporterId ? { recipient: reporterId, actionName: 'Incident Assigned', message: `Your incident "${incident.title}" was assigned for handling.` } : null,
             ].filter(Boolean),
         }
@@ -1220,7 +1231,7 @@ const addProgressNote = async (incidentId, note, user) => {
     assertIncidentMutationAccess(incident, user, 'update');
 
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: note || 'Operational field update recorded.', updatedBy: user.name, timestamp: Date.now() });
+    incident.progressLogs.push({ note: note || 'Operational field update recorded.', updatedBy: formatUserLogLabel(user), timestamp: Date.now() });
     if (incident.rejectionReason) incident.rejectionReason = null;
 
     await incident.save();
@@ -1280,9 +1291,9 @@ const requestClosure = async (incidentId, actionTaken, user) => {
         incident.closedBy = user.id;
         incident.closureRequested = false;
         incident.rejectionReason = null;
-        incident.progressLogs.push({ note: `CASE CLOSED: ${trimmedActionTaken}`, updatedBy: user.name, timestamp: closedAt });
+        incident.progressLogs.push({ note: `CASE CLOSED: ${trimmedActionTaken}`, updatedBy: formatUserLogLabel(user), timestamp: closedAt });
     } else {
-        incident.progressLogs.push({ note: 'CLOSURE REQUESTED: Investigation completed and submitted for final seal.', updatedBy: user.name, timestamp: Date.now() });
+        incident.progressLogs.push({ note: 'CLOSURE REQUESTED: Investigation completed and submitted for final seal.', updatedBy: formatUserLogLabel(user), timestamp: Date.now() });
     }
 
     await incident.save();
@@ -1310,7 +1321,7 @@ const finalizeClosure = async (incidentId, note, user) => {
     incident.closureRequested = false;
     incident.rejectionReason = null;
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: note || 'CASE PERMANENTLY SEALED: Admin finalized closure.', updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
+    incident.progressLogs.push({ note: note || 'CASE PERMANENTLY SEALED: Admin finalized closure.', updatedBy: formatUserLogLabel(user), timestamp: Date.now() });
 
     await incident.save();
 
@@ -1319,7 +1330,7 @@ const finalizeClosure = async (incidentId, note, user) => {
 
     createLog('Incident Closed', user, 'Incident', incident._id, buildIncidentMetadata(incident, { note: note || null, status: incident.status, closedAt: incident.closedAt }), {
         type: 'INCIDENT_CLOSED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident),
-        recipientEntries: [repId, handId].filter(Boolean).map((recipient) => ({ recipient, actionName: 'Incident Closed', message: `Admin ${user.name} closed "${incident.title}".` })),
+        recipientEntries: [repId, handId].filter(Boolean).map((recipient) => ({ recipient, actionName: 'Incident Closed', message: `${user.name} closed "${incident.title}".` })),
     });
 
     return { message: 'Case permanently closed.' };
@@ -1344,7 +1355,7 @@ const rejectClosure = async (incidentId, reason, user) => {
     incident.rejectionReason = rejectionReason;
     incident.status = 'Pending';
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: `CLOSURE REJECTED: ${rejectionReason}`, updatedBy: `${user.name} (Admin)`, timestamp: Date.now() });
+    incident.progressLogs.push({ note: `CLOSURE REJECTED: ${rejectionReason}`, updatedBy: formatUserLogLabel(user), timestamp: Date.now() });
 
     await incident.save();
 
@@ -1352,7 +1363,7 @@ const rejectClosure = async (incidentId, reason, user) => {
 
     createLog('Closure Rejected', user, 'Incident', incident._id, buildIncidentMetadata(incident, { reason: incident.rejectionReason, status: incident.status, closureRequested: incident.closureRequested }), {
         type: 'INCIDENT_STATUS_UPDATED', incidentId: incident._id, targetLabel: incident.title, targetAdmissionNumber: incident.admissionNo || null, routePath: `/incidents/${incident._id}`, studentDetails: buildIncidentStudentDetails(incident),
-        recipientEntries: handlerId ? [{ recipient: handlerId, actionName: 'Closure Rejected', message: `Admin ${user.name} rejected closure for "${incident.title}".` }] : [],
+        recipientEntries: handlerId ? [{ recipient: handlerId, actionName: 'Closure Rejected', message: `${user.name} rejected closure for "${incident.title}".` }] : [],
     });
 
     return { message: 'Closure rejected and case returned to the handler.', status: incident.status, rejectionReason: incident.rejectionReason };
@@ -1413,7 +1424,7 @@ const addEvidence = async (incidentId, files, evidenceDataRaw, user) => {
 
     incident.evidence.push(...newEntries);
     trimProgressLogsBeforePush(incident);
-    incident.progressLogs.push({ note: `ADDED NEW EVIDENCE: ${newEntries.length} items attached by ${user.name}.`, updatedBy: user.name, timestamp: Date.now() });
+    incident.progressLogs.push({ note: `ADDED NEW EVIDENCE: ${newEntries.length} items attached by ${formatUserLogLabel(user)}.`, updatedBy: formatUserLogLabel(user), timestamp: Date.now() });
 
     await incident.save();
     return incident;
@@ -1450,8 +1461,8 @@ const deleteEvidence = async (incidentId, evidenceId, user) => {
     incident.evidence.pull(evidenceId);
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
-        note: `DELETED EVIDENCE: ${evidenceLabel} removed by ${user.name}.`,
-        updatedBy: user.name,
+        note: `DELETED EVIDENCE: ${evidenceLabel} removed by ${formatUserLogLabel(user)}.`,
+        updatedBy: formatUserLogLabel(user),
         timestamp: Date.now(),
     });
 
@@ -1488,7 +1499,7 @@ const updateDescription = async (incidentId, description, user) => {
     trimProgressLogsBeforePush(incident);
     incident.progressLogs.push({
         note: 'INCIDENT DESCRIPTION UPDATED.',
-        updatedBy: user.name,
+        updatedBy: formatUserLogLabel(user),
         timestamp: Date.now(),
     });
 
@@ -1754,6 +1765,12 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
             if (!handler) { addFieldError('handledBy', `Staff "${handledByInput}" not found`); continue; }
             assignedHandler = handler._id;
         }
+        if (!assignedHandler) {
+            const defaultAdmin = await User.findOne({ schoolId: user.schoolId, role: { $in: ['Admin', 'Super Admin'] } }).select('_id').lean();
+            if (defaultAdmin) {
+                assignedHandler = defaultAdmin._id;
+            }
+        }
 
         const highPriorityInput = getCellValue('highPriority', 'highPriority (Yes/No)', 'highpriority');
         const priorityLower = highPriorityInput.toLowerCase();
@@ -1938,7 +1955,7 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
                     entityType: 'Bulk Upload',
                     entityId: null,
                     actionName: 'Bulk Upload Processed',
-                    message: `Admin ${user.name} bulk uploaded ${createdIncidents.length} incidents from Excel file`,
+                    message: `${user.name} bulk uploaded ${createdIncidents.length} incidents from Excel file`,
                     performedBy: String(user.id || user._id),
                     performedByName: user.name,
                     performedByRole: user.role,

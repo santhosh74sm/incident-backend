@@ -171,6 +171,25 @@ const startServer = async () => {
             modifiedCount: fieldOpsMigrationResult.modifiedCount,
         });
 
+        // Database migration 3: backfill unassigned incidents with a default Admin for that school
+        const User = require('./models/User');
+        const unassignedIncidents = await Incident.find({ assignedHandler: null }).select('_id schoolId').lean();
+        if (unassignedIncidents.length > 0) {
+            const schoolIds = [...new Set(unassignedIncidents.map((i) => String(i.schoolId)))];
+            let migratedCount = 0;
+            for (const schoolId of schoolIds) {
+                const defaultAdmin = await User.findOne({ schoolId, role: { $in: ['Admin', 'Super Admin'] } }).select('_id').lean();
+                if (defaultAdmin) {
+                    const res = await Incident.updateMany(
+                        { schoolId, assignedHandler: null },
+                        { $set: { assignedHandler: defaultAdmin._id } }
+                    );
+                    migratedCount += res.modifiedCount;
+                }
+            }
+            logger.info('Incident handler auto-assignment migration completed', { migratedCount });
+        }
+
         server = app.listen(PORT, () => {
             logger.info(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'} mode)`);
             logger.info('Registered security bootstrap routes', {
