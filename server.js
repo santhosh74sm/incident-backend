@@ -152,15 +152,23 @@ const startServer = async () => {
     try {
         await connectDB();
 
-        // Database migration: map Open and In Progress statuses to Pending
+        // Database migration 1: map Open and In Progress statuses to Pending
         const Incident = require('./models/Incident');
         const migrationResult = await Incident.updateMany(
             { status: { $in: ['Open', 'In Progress'] } },
             { $set: { status: 'Pending' } }
         );
-        logger.info('Database migration completed successfully', {
+        logger.info('Incident status migration completed successfully', {
             matchedCount: migrationResult.matchedCount,
             modifiedCount: migrationResult.modifiedCount,
+        });
+
+        // Database migration 2: migrate legacy FieldOperationOption types to 'updated'
+        const { migrateFieldOperationOptions } = require('./services/optionService');
+        const fieldOpsMigrationResult = await migrateFieldOperationOptions();
+        logger.info('FieldOperationOption migration completed successfully', {
+            matchedCount: fieldOpsMigrationResult.matchedCount,
+            modifiedCount: fieldOpsMigrationResult.modifiedCount,
         });
 
         server = app.listen(PORT, () => {

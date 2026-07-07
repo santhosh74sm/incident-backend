@@ -354,16 +354,21 @@ const loginUser = async ({ email, password, loginType, schoolId }) => {
     throw new AppError('Login type not specified', 400);
 };
 
-const getCurrentUserResponse = async (user) => ({
-    id: user._id || user.id,
-    name: user.name,
-    email: user.email,
-    role: toClientRole(user.role),
-    schoolId: user.schoolId,
-    admissionNo: user.admissionNo,
-    currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
-    mustChangePassword: user.mustChangePassword,
-});
+const getCurrentUserResponse = async (user) => {
+    const SchoolWorkspace = require('../models/SchoolWorkspace');
+    const workspace = await SchoolWorkspace.findOne({ schoolId: user.schoolId }).lean();
+    return {
+        id: user._id || user.id,
+        name: user.name,
+        email: user.email,
+        role: toClientRole(user.role),
+        schoolId: user.schoolId,
+        schoolName: workspace?.schoolName || null,
+        admissionNo: user.admissionNo,
+        currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
+        mustChangePassword: user.mustChangePassword,
+    };
+};
 
 const getAllUsers = async ({ actor } = {}) => {
     const actorRole = toClientRole(actor?.role);

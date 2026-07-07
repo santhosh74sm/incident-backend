@@ -9,12 +9,13 @@ const AppError = require('../utils/AppError');
 const { tenantFilter, tenantDoc } = require('../utils/tenant');
 
 // Migrate legacy handler/assigner options to 'updated'
-FieldOperationOption.updateMany(
-    { type: { $in: ['handler', 'assigner', 'updated-notes'] } },
-    { $set: { type: 'updated' } }
-).exec().catch(err => {
-    console.error('FieldOperationOption migration error:', err);
-});
+const migrateFieldOperationOptions = async () => {
+    return FieldOperationOption.updateMany(
+        { type: { $in: ['handler', 'assigner', 'updated-notes'] } },
+        { $set: { type: 'updated' } }
+    );
+};
+
 
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -347,4 +348,5 @@ module.exports = {
     addFieldOperationOption,
     deleteFieldOperationOption,
     reorderFieldOperationOptions,
+    migrateFieldOperationOptions,
 };
