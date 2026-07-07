@@ -28,7 +28,7 @@ const globalApiRateLimiter = rateLimit({
 const authSensitiveRateLimiter = rateLimit({
     ...rateLimitOptions,
     windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || windowMs,
-    limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || 10,
+    limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || (process.env.NODE_ENV === 'production' ? 10 : 100),
     message: undefined,
     handler: (req, res) => {
         res.status(429).json({

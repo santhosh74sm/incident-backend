@@ -125,7 +125,7 @@ router.delete('/:id', protect, authorize('Super Admin', 'Admin'), validate(objec
 router.get('/:id/export-report', protect, validate(objectIdParamSchema, 'params'), exportIncidentReport);
 
 // ─── Workflow transitions (PUT — aligned with frontend apiClient) ─────────────
-router.put('/:id/assign', protect, authorize('Super Admin', 'Admin'), validate(objectIdParamSchema, 'params'), validate(assignIncidentSchema), assignIncident);
+router.put('/:id/assign', protect, authorize('Super Admin', 'Admin', 'Teacher'), validate(objectIdParamSchema, 'params'), validate(assignIncidentSchema), assignIncident);
 router.put('/:id/progress', protect, validate(objectIdParamSchema, 'params'), validate(progressNoteSchema), addProgressNote);
 router.put('/:id/description', protect, validate(objectIdParamSchema, 'params'), validate(updateDescriptionSchema), updateIncidentDescription);
 router.put('/:id/request-closure', protect, validate(objectIdParamSchema, 'params'), validate(requestClosureSchema), requestClosure);

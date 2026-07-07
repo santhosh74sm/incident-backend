@@ -103,7 +103,7 @@ const canAccessIncident = (incident, user) => {
     const userId = toIdString(user.id || user._id);
 
     if (OPERATIONAL_ROLES.includes(user.role)) {
-        return [incident.reportedBy, incident.assignedHandler].some((id) => toIdString(id) === userId);
+        return true;
     }
 
     if (user.role === 'Student') {
@@ -376,13 +376,7 @@ const buildIncidentQuery = async (user, query) => {
         baseConditions.push({ isHighPriority: true });
     }
 
-    if (OPERATIONAL_ROLES.includes(user.role)) {
-        const userId = getUserId(user);
-        const scopedUserId = mongoose.Types.ObjectId.isValid(userId)
-            ? new mongoose.Types.ObjectId(userId)
-            : userId;
-        baseConditions.push({ $or: [{ reportedBy: scopedUserId }, { assignedHandler: scopedUserId }] });
-    }
+
 
     const classes = parseAliasedListParam(query, ['classes', 'class', 'className']);
     if (classes.length > 0) baseConditions.push({ class: { $in: classes } });
@@ -606,6 +600,7 @@ const dispatchIncidentCreatedNotifications = async (incidents, user) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createIncidents = async ({ body, files, user }) => {
+    const isTeacherCreator = OPERATIONAL_ROLES.includes(user.role);
     const academicYear = body.academicYear
         ? validateAcademicYear(body.academicYear)
         : await getCurrentAcademicYear(user);
@@ -659,20 +654,12 @@ const createIncidents = async ({ body, files, user }) => {
 
     const cls = Array.isArray(body.class) ? body.class[0] : body.class;
     const sec = Array.isArray(body.section) ? body.section[0] : body.section;
-    const isTeacherCreator = OPERATIONAL_ROLES.includes(user.role);
-
     const ALLOWED_FIELDS = ['category', 'description', 'location', 'severity', 'isHighPriority', 'highPriority', 'assignedHandler', 'actionTaken'];
     const incidentData = Object.fromEntries(
         Object.entries(body).filter(([key]) => ALLOWED_FIELDS.includes(key))
     );
-    if (isTeacherCreator) {
-        incidentData.assignedHandler = user.id;
-    }
     if (!incidentData.assignedHandler) {
-        const defaultAdmin = await User.findOne({ schoolId: user.schoolId, role: { $in: ['Admin', 'Super Admin'] } }).select('_id').lean();
-        if (defaultAdmin) {
-            incidentData.assignedHandler = defaultAdmin._id;
-        }
+        incidentData.assignedHandler = user.id;
     }
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
@@ -1758,7 +1745,7 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
         }
         if (hasInvalidEvidence) continue;
 
-        let assignedHandler = OPERATIONAL_ROLES.includes(user.role) ? user.id : null;
+        let assignedHandler = null;
         const handledByInput = getCellValue('handledBy', 'handledBy (Staff Email)', 'assignedby', 'assignee');
         if (handledByInput && isAdministrationRole(user.role)) {
             const handler = userMap.get(handledByInput.toLowerCase().trim());
@@ -1766,10 +1753,7 @@ const processExcelUpload = async (filePath, user, body, options = {}) => {
             assignedHandler = handler._id;
         }
         if (!assignedHandler) {
-            const defaultAdmin = await User.findOne({ schoolId: user.schoolId, role: { $in: ['Admin', 'Super Admin'] } }).select('_id').lean();
-            if (defaultAdmin) {
-                assignedHandler = defaultAdmin._id;
-            }
+            assignedHandler = user.id;
         }
 
         const highPriorityInput = getCellValue('highPriority', 'highPriority (Yes/No)', 'highpriority');

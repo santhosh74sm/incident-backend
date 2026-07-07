@@ -1,6 +1,7 @@
 const generateToken = require('../config/generateToken');
 const authService = require('../services/authService');
 const sessionService = require('../services/sessionService');
+const { authSensitiveRateLimiter } = require('../middleware/rateLimit.middleware');
 const {
     setAuthCookie: setCookie,
     setRefreshCookie,
@@ -66,6 +67,9 @@ const loginUser = async (req, res, next) => {
             type: result.tokenType,
             req,
         }));
+        if (authSensitiveRateLimiter && typeof authSensitiveRateLimiter.resetKey === 'function') {
+            authSensitiveRateLimiter.resetKey(req.ip);
+        }
         res.json(result.response);
     } catch (error) {
         next(error);
