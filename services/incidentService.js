@@ -43,6 +43,7 @@ const { getCurrentAcademicYear, getAcademicYearQuery, validateAcademicYear } = r
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ADMIN_ROLES = ['Super Admin', 'Admin', 'super_admin', 'admin'];
 const OPERATIONAL_ROLES = ['Teacher', 'teacher'];
+const ALL_ASSIGNABLE_ROLES = [...ADMIN_ROLES, ...OPERATIONAL_ROLES];
 const ADMIN_KEYWORDS = ['admin', 'super_admin', 'super admin', 'administration'];
 const MAX_PROGRESS_LOGS = 500;
 const UNKNOWN_FILTER_LABEL = 'Unknown';
@@ -1165,7 +1166,7 @@ const assignIncident = async (incidentId, handlerId, user) => {
 
     const roleAllowed = isSelfAssignment
         ? ADMIN_ROLES.includes(handler.role)
-        : OPERATIONAL_ROLES.includes(handler.role);
+        : ALL_ASSIGNABLE_ROLES.includes(handler.role);
 
     if (!roleAllowed) {
         const err = new Error('Selected staff member cannot be assigned.');
