@@ -779,12 +779,18 @@ const listIncidents = async ({ user, query, maxLimit = 100 }) => {
     const shouldPaginate = query.page !== undefined || query.limit !== undefined;
     const pagination = getPagination(query, { defaultLimit: 20, maxLimit });
 
+    let sortObj = { status: -1, incidentDate: -1, createdAt: -1 };
+    if (query.sortBy) {
+        const direction = String(query.sortDirection).toLowerCase() === 'asc' ? 1 : -1;
+        sortObj = { [query.sortBy]: direction };
+    }
+
     let incidentQuery = Incident.find(builtQuery)
         .populate('reportedBy', 'name role')
         .populate('assignedHandler', 'name role')
         .populate('closedBy', 'name role')
         .populate('student', 'name admissionNo className section academicYear status history')
-        .sort({ status: -1, incidentDate: -1, createdAt: -1 });
+        .sort(sortObj);
 
     // lean() skips Mongoose document hydration — significant memory + speed win for read-only list
 
