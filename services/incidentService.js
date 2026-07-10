@@ -784,7 +784,7 @@ const listIncidents = async ({ user, query, maxLimit = 100 }) => {
         .populate('assignedHandler', 'name role')
         .populate('closedBy', 'name role')
         .populate('student', 'name admissionNo className section academicYear status history')
-        .sort({ incidentDate: -1, createdAt: -1 });
+        .sort({ status: -1, incidentDate: -1, createdAt: -1 });
 
     // lean() skips Mongoose document hydration — significant memory + speed win for read-only list
 
