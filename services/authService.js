@@ -10,6 +10,7 @@ const AppError = require('../utils/AppError');
 const { assertSchoolId, tenantFilter } = require('../utils/tenant');
 const {
     validateAcademicYear,
+    getCurrentAcademicYear,
     getAcademicYearSummary,
     changeAcademicYear,
     reverseAcademicYearUpdate,
@@ -45,6 +46,28 @@ const getActorId = (actor) => actor?.id || actor?._id || 'System';
 const isAdminRole = (role) => ADMIN_ROLES.includes(toClientRole(role));
 
 const getAdminExists = async () => Boolean(await SchoolWorkspace.exists({ status: 'active' }));
+
+// Resolve dashboard identity from the authenticated account's tenant key. This
+// keeps the displayed workspace data tied to the same schoolId used for access
+// control, rather than to a client-held value.
+const resolveWorkspaceProfile = async (user) => {
+    const schoolId = assertSchoolId(user?.schoolId);
+    const workspace = await SchoolWorkspace
+        .findOne({ schoolId })
+        .select('schoolName currentAcademicYear')
+        .lean();
+
+    if (!workspace) {
+        throw new AppError('School workspace not found.', 404);
+    }
+
+    return {
+        schoolId,
+        schoolName: workspace.schoolName,
+        // Keep the established fallback for legacy workspace documents.
+        currentAcademicYear: workspace.currentAcademicYear || await getCurrentAcademicYear(schoolId),
+    };
+};
 
 const buildSchoolCode = (schoolName) => {
     const ignored = new Set(['SCHOOL', 'HIGHER', 'SECONDARY', 'MATRIC', 'PUBLIC', 'THE']);
@@ -285,6 +308,8 @@ const loginStaff = async ({ email, password }) => {
         { name: user.name, role: user.role }
     );
 
+    const workspace = await resolveWorkspaceProfile(user);
+
     return {
         user,
         response: {
@@ -292,8 +317,9 @@ const loginStaff = async ({ email, password }) => {
             name: user.name,
             email: user.email,
             role: toClientRole(user.role),
-            schoolId: user.schoolId,
-            currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
+            schoolId: workspace.schoolId,
+            schoolName: workspace.schoolName,
+            currentAcademicYear: workspace.currentAcademicYear,
             mustChangePassword: user.mustChangePassword,
         },
         tokenType: 'staff',
@@ -327,6 +353,8 @@ const loginStudent = async ({ email, password, schoolId }) => {
         throw new AppError('Invalid Student ID or Password', 401);
     }
 
+    const workspace = await resolveWorkspaceProfile(student);
+
     return {
         user: student,
         response: {
@@ -334,8 +362,9 @@ const loginStudent = async ({ email, password, schoolId }) => {
             name: student.name,
             role: 'Student',
             admissionNo: student.admissionNo,
-            schoolId: student.schoolId,
-            currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(student),
+            schoolId: workspace.schoolId,
+            schoolName: workspace.schoolName,
+            currentAcademicYear: workspace.currentAcademicYear,
             mustChangePassword: student.mustChangePassword,
         },
         tokenType: 'student',
@@ -355,17 +384,16 @@ const loginUser = async ({ email, password, loginType, schoolId }) => {
 };
 
 const getCurrentUserResponse = async (user) => {
-    const SchoolWorkspace = require('../models/SchoolWorkspace');
-    const workspace = await SchoolWorkspace.findOne({ schoolId: user.schoolId }).lean();
+    const workspace = await resolveWorkspaceProfile(user);
     return {
         id: user._id || user.id,
         name: user.name,
         email: user.email,
         role: toClientRole(user.role),
-        schoolId: user.schoolId,
-        schoolName: workspace?.schoolName || null,
+        schoolId: workspace.schoolId,
+        schoolName: workspace.schoolName,
         admissionNo: user.admissionNo,
-        currentAcademicYear: await require('./academicYearService').getCurrentAcademicYear(user),
+        currentAcademicYear: workspace.currentAcademicYear,
         mustChangePassword: user.mustChangePassword,
     };
 };
