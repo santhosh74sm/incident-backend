@@ -348,7 +348,7 @@ const getFilters = async (actor, options = {}) => {
             },
         };
 
-    const [filterValues = { classes: [], sections: [] }] = await Student.aggregate([
+    const groups = await Student.aggregate([
         { $match: match },
         { $project: { records: recordsExpression } },
         { $unwind: '$records' },
@@ -356,18 +356,34 @@ const getFilters = async (actor, options = {}) => {
         { $match: { status: selectedStatus } },
         {
             $group: {
-                _id: null,
-                classes: { $addToSet: '$className' },
+                _id: '$className',
                 sections: { $addToSet: '$section' },
             },
         },
     ]);
-    const classes = filterValues.classes || [];
-    const sections = filterValues.sections || [];
+
+    const classSectionMap = {};
+    const allSections = new Set();
+    const classesList = [];
+
+    groups.forEach((group) => {
+        const cls = group._id;
+        if (!cls) return;
+        classesList.push(cls);
+        const sortedSecs = (group.sections || []).filter(Boolean).sort();
+        classSectionMap[cls] = sortedSecs;
+        sortedSecs.forEach((sec) => allSections.add(sec));
+    });
 
     return {
-        classes: classes.filter(Boolean).sort((a, b) => a - b),
-        sections: sections.filter(Boolean).sort(),
+        classes: classesList.filter(Boolean).sort((a, b) => {
+            const aNum = parseInt(a, 10);
+            const bNum = parseInt(b, 10);
+            if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+            return a.localeCompare(b);
+        }),
+        sections: Array.from(allSections).filter(Boolean).sort(),
+        classSectionMap,
         currentAcademicYear,
     };
 };
