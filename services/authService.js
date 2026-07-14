@@ -399,10 +399,7 @@ const getCurrentUserResponse = async (user) => {
 };
 
 const getAllUsers = async ({ actor } = {}) => {
-    const actorRole = toClientRole(actor?.role);
-    const query = isAdminRole(actorRole)
-        ? tenantFilter(actor, { role: { $in: ACCOUNT_USER_ROLES } })
-        : tenantFilter(actor, { role: { $in: TEACHER_ROLES } });
+    const query = tenantFilter(actor, { role: { $in: ACCOUNT_USER_ROLES } });
     const users = await User.find(query).select('-password').lean();
     return users.map((user) => ({
         ...user,
