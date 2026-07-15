@@ -11,7 +11,33 @@ const { assertSchoolId } = require('../utils/tenant');
 const logger = require('../utils/pinoLogger');
 
 const ACADEMIC_YEAR_PATTERN = /^\d{4}-\d{2}$/;
+// In-memory Set retained for backward compatibility but replaced by DB lock.
 const activeAcademicYearChanges = new Set();
+
+// Helper to acquire a distributed lock using SchoolWorkspace document.
+const acquireAcademicYearLock = async (schoolId) => {
+  const result = await SchoolWorkspace.findOneAndUpdate(
+    { schoolId, academicYearChangeLock: { $ne: true } },
+    { $set: { academicYearChangeLock: true } },
+    { new: true }
+  );
+  if (!result) {
+    throw new AppError('Academic Year change is already in progress. Please wait for it to finish.', 409);
+  }
+  return result;
+};
+
+// Helper to release the lock.
+const releaseAcademicYearLock = async (schoolId) => {
+  await SchoolWorkspace.updateOne({ schoolId }, { $unset: { academicYearChangeLock: '' } });
+};
+
+// S3 cleanup service import for rollback.
+const {
+    deleteS3ObjectsOrThrow,
+    getIncidentEvidenceKeys,
+    getIncidentReportExportKeys,
+} = require('./s3CleanupService');
 
 const normalizeAcademicYear = (value) => String(value || '').trim();
 
@@ -310,10 +336,8 @@ const changeAcademicYear = async ({ actor, academicYear }) => {
     }
 
     const schoolId = assertSchoolId(actor.schoolId);
-    if (activeAcademicYearChanges.has(schoolId)) {
-        throw new AppError('Academic Year change is already in progress. Please wait for it to finish.', 409);
-    }
-    activeAcademicYearChanges.add(schoolId);
+    // Acquire distributed lock for this school.
+    await acquireAcademicYearLock(schoolId);
 
     let session = null;
 
@@ -396,7 +420,8 @@ const changeAcademicYear = async ({ actor, academicYear }) => {
         if (error instanceof AppError) throw error;
         throw new AppError('Academic Year change failed. No changes were saved.', 500);
     } finally {
-        activeAcademicYearChanges.delete(schoolId);
+        // Release lock and clean up session.
+        await releaseAcademicYearLock(schoolId);
         if (session) await session.endSession();
     }
 };
@@ -407,10 +432,8 @@ const reverseAcademicYearUpdate = async ({ actor }) => {
     }
 
     const schoolId = assertSchoolId(actor.schoolId);
-    if (activeAcademicYearChanges.has(schoolId)) {
-        throw new AppError('Academic Year change is already in progress. Please wait for it to finish.', 409);
-    }
-    activeAcademicYearChanges.add(schoolId);
+    // Acquire distributed lock for rollback.
+    await acquireAcademicYearLock(schoolId);
 
     const startedAt = Date.now();
     let session = null;
@@ -480,6 +503,35 @@ const reverseAcademicYearUpdate = async ({ actor }) => {
             let promotedYearOnlyStudentsRemoved = 0;
             const promotionCreatedAt = promotionLog.createdAt ? new Date(promotionLog.createdAt) : null;
 
+            // ---------- S3 CLEANUP BEFORE DB DELETIONS ----------
+            // Load incidents for the removed academic year.
+            const incidents = await Incident.find({ schoolId, academicYear: removedAcademicYear })
+                .select('_id evidence')
+                .lean()
+                .session(session);
+
+            // Load issued letters for the removed academic year.
+            const letters = await IssuedLetter.find({ schoolId, academicYear: removedAcademicYear })
+                .select('generatedDocxKey')
+                .lean()
+                .session(session);
+
+            // Gather all S3 keys to delete
+            const evidenceKeys = incidents.flatMap(getIncidentEvidenceKeys);
+            const incidentIdsList = incidents.map((i) => i._id);
+            const reportKeys = await getIncidentReportExportKeys(incidentIdsList, { schoolId });
+            const letterKeys = letters.map((l) => l.generatedDocxKey).filter(Boolean);
+
+            const allKeysToDelete = [...evidenceKeys, ...reportKeys, ...letterKeys];
+
+            // Delete S3 files associated with these incidents and letters.
+            await deleteS3ObjectsOrThrow(allKeysToDelete, {
+                operation: 'reverseAcademicYearUpdate',
+                schoolId,
+                academicYear: removedAcademicYear,
+            });
+
+            // Continue with DB deletions as originally implemented.
             for (const student of affectedStudents) {
                 const previousEntry = getHistoryEntryForYear(student, previousAcademicYear);
 
@@ -551,11 +603,8 @@ const reverseAcademicYearUpdate = async ({ actor }) => {
 
             currentStep = 'load_year_records';
             logRollbackStep(10, 'Loading promoted year incident records.', { schoolId, removedAcademicYear, collection: 'Incident' });
-            const incidentIds = await Incident.find({ schoolId, academicYear: removedAcademicYear })
-                .select('_id')
-                .lean()
-                .session(session);
-            const incidentObjectIds = incidentIds.map((incident) => incident._id);
+            // NOTE: S3 cleanup already performed above before this block.
+            const incidentObjectIds = incidents.map((incident) => incident._id);
             const incidentStringIds = incidentObjectIds.map((id) => String(id));
 
             currentStep = 'delete_year_records';
@@ -671,10 +720,13 @@ const reverseAcademicYearUpdate = async ({ actor }) => {
         return rollbackResult;
     } catch (error) {
         logRollbackFailure(currentStep, error, { schoolId });
+        // Release the lock before propagating the error.
+        await releaseAcademicYearLock(schoolId);
         if (error instanceof AppError) throw error;
         throw new AppError(`Rollback failed. Reason: ${error.message || 'Unexpected server error'}. No changes were made.`, 500, 'ACADEMIC_YEAR_ROLLBACK_FAILED');
     } finally {
-        activeAcademicYearChanges.delete(schoolId);
+        // Ensure lock is cleared in all paths.
+        await releaseAcademicYearLock(schoolId);
         if (session) await session.endSession();
     }
 };
