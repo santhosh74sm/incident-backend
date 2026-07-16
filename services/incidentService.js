@@ -1021,7 +1021,13 @@ const getProfessionalAnalytics = async ({ user, query = {} }) => {
 const getProfessionalAnalyticsDetails = async ({ user, query = {} }) => {
     const result = await listIncidents({
         user,
-        query: { ...query, page: query.page || 1, limit: query.limit || 100 },
+        query: {
+            ...query,
+            page: query.page || 1,
+            limit: query.limit || 100,
+            sortBy: query.sortBy || 'incidentDate',
+            sortDirection: query.sortDirection || 'asc',
+        },
         maxLimit: 500,
     });
     const data = result.data || [];
