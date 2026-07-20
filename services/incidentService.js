@@ -664,7 +664,7 @@ const createIncidents = async ({ body, files, user }) => {
     }
 
     const useManualTiming = body.manualTiming === 'true' || body.manualTiming === true;
-    const finalStatus = body.status || body.initialStatus || 'Pending';
+    const finalStatus = body.status;
     const isClosed = finalStatus === 'Closed';
     const manualOpenedAt = body.openedAt ? new Date(body.openedAt) : null;
     const manualInProgressAt = body.inProgressAt ? new Date(body.inProgressAt) : null;
